@@ -1,2 +1,7 @@
 *.exe
 *.jpg
+document.aux
+document.fls
+document.log
+document.pdf
+document.synctex.gz
