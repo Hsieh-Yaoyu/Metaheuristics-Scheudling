@@ -12,15 +12,15 @@
 \usepackage{xeCJK}
 \setmainfont{Times New Roman}
 % 設定主要的繁體中文字體，您可以根據您的作業系統或編譯環境更改
-\setCJKmainfont{Noto Sans TC} % Windows 常用的字體
-% \setCJKmainfont{標楷體}   % 如果想要比較正式的襯線字體
+%\setCJKmainfont{Noto Sans TC} % Windows 常用的字體
+\setCJKmainfont{標楷體}   % 如果想要比較正式的襯線字體
 
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 \begin{document}
 
 \title{Metaheuristics Algorithum for Machine Scheudling\\
-{\footnotesize 基於啟發使演算法解決機器排成問題}
+{\footnotesize 基於啟發式演算法解決機器排程問題}
 % \thanks{Identify applicable funding agency here. If none, delete this.}
 }
 
@@ -32,12 +32,12 @@
 Taipei, Taiwan(R.O.C) \\
 61447026s@ntnu.edu.tw}
 \and
-\IEEEauthorblockN{2\textsuperscript{nd}Hsieh Yao-yu}
-\IEEEauthorblockA{\textit{Department of Computer Science and} \\
-\textit{Information Engineering}\\
+\IEEEauthorblockN{2\textsuperscript{nd} Hsieh Yao-yu}
+\IEEEauthorblockA{\textit{Graduate Institude of} \\
+\textit{Science Education}\\
 \textit{Nation Taiwan Normal University}\\
 Taipei, Taiwan(R.O.C) \\
-@ntnu.edu.tw}
+61345001s@ntnu.edu.tw}
 \and
 \IEEEauthorblockN{3\textsuperscript{rd} Given Name Surname}
 \IEEEauthorblockA{\textit{Department of Computer Science and} \\
@@ -50,19 +50,63 @@ Taipei, Taiwan(R.O.C) \\
 
 
 \maketitle
+\section{問題定義}
+{\fontsize{10pt}{12pt}\selectfont
+定序流線型工廠排程問題 (Permutation Flowshop Scheduling Problem, PFSP)
+旨在決定 $n$ 個工作在 $m$ 台機器上的最佳加工順序。
 
-\begin{abstract}
+本實驗之輸入包含
+工作集合$J = \{j_1, j_2, \dots, j_n\}$、
+機器集合 $M = \{M_1, M_2, \dots, M_m\}$
+以及加工時間矩陣 $p_{i,j}$。
 
-\end{abstract}
+核心限制條件如下：
+所有工作在各台機器上的加工順序 $\pi$ 必須完全一致，
+且機器在同一時間僅能處理單一工作，
+加工過程不可中斷。
+目標函數為極小化總完工時間(Makespan)，記作 $C_{max}$。
 
-% \begin{IEEEkeywords}
-% component, formatting, style, styling, insert
-% \end{IEEEkeywords}
+定義 $C(\pi_k, i)$ 為位置 $k$ 的工作在機器 $i$ 的完工時間，
+其遞迴關係如下：
+\begin{equation}
+    C(\pi_k, i) = \max\{C(\pi_{k-1}, i), C(\pi_k, i-1)\} + p_{i,\pi_k}
+\end{equation}
+最終目標為尋求一排列 $\pi^*$ 使得 $Z = C(\pi_n, m)$ 達最小值。
+}
 
-\section{Introduction}
+\section{軌跡式啟發式演算法}
+{\fontsize{10pt}{12pt}\selectfont
+本研究實作三種啟發式演算法以求解 PFSP 問題。各個演算法皆基於鄰域搜尋架構，透過不同的接受準則與搜尋策略，在解空間中尋找近似最佳解。以下詳述各演算法之實現細節。
 
-\subsection{Structure}
-% 程式架構
+\subsection{共通部分}
+本實驗之演算法實作包含以下兩個核心要素：
+\begin{itemize}
+    \setlength{\itemsep}{0pt}
+    \item \textbf{解表示法 (Representation)}：採工作序列編碼。若有 $n$ 個工作，則解為一長度為 $n$ 的排列向量。
+    \item \textbf{鄰域函式 (Neighborhood Function)}：採用交換移動 (Swap)。定義鄰域運算為隨機選取序列中兩個位置並交換其內容，以產生新的可行解。
+\end{itemize}
+
+\subsection{反覆改善法 (\textnormal{Iterative Improvement, II})}
+反覆改善法採貪婪策略。其\textbf{接受條件 (Acceptance Criterion)}為：僅當鄰近解 $\pi'$ 的目標值優於當前解 $\pi$ 時，方接受更新。其邏輯如下式：
+\begin{equation}
+    f(\pi') < f(\pi)
+\end{equation}
+
+\subsection{模擬退火法 (Simulated Annealing, SA)}
+模擬退火法引入機率機制以跳脫局部最佳解。其\textbf{冷卻時程 (Cooling Schedule)}採用幾何降溫模型，相關數學關係與參數如下：
+\begin{equation}
+    T_{k+1} = \alpha \times T_k
+\end{equation}
+\begin{equation}
+    P(\text{accept}) = \exp\left( \frac{-\Delta f}{T} \right)
+\end{equation}
+其中變數 $\alpha$ 為冷卻率（設定於第 III-B 節），$T$ 為當前溫度。當 $\Delta f > 0$（即新解較差）時，仍有 $P$ 之機率接受該解。
+
+\subsection{禁忌搜尋法 (Tabu Search, TS)}
+禁忌搜尋法利用記憶機制避免重複搜尋。其\textbf{禁忌列表 (Tabu List)} 儲存的是最近執行的交換動作（即工作對及其位置），旨在防止搜尋過程回流至已探索區域。
+此外，本實作包含\textbf{渴望條件 (Aspiration Criterion)}：若某一受禁忌限制的移動能產生優於目前史上最佳解 $f_{best}$ 的結果，則無視禁忌狀態強制接受該移動。
+}
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -70,7 +114,7 @@ Taipei, Taiwan(R.O.C) \\
 %這邊著重在介紹演算法，實作細節在Implement Detail
 
 \subsection{Scheduling Problem}
-% 介紹工作排成問題
+% 介紹工作排程問題
 
 \subsection{Iterative Improvement} 
 
