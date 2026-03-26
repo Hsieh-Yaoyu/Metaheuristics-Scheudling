@@ -9,6 +9,8 @@
 #include <iomanip>
 #include <string>
 #include <omp.h> // 引入 OpenMP 標頭檔
+#include <unordered_map>
+#include <cstdint>
 
 namespace fs = std::filesystem;
 
@@ -198,7 +200,7 @@ public:
     }
 
     std::vector<int> simulated_annealing(const std::string &instance_name, const std::string &save_dir, double initial_temp = 100.0, double cooling_rate = 0.95, int max_iter = 1000){
-        init_gnuplot("SA Trajectory - " + instance_name);
+        init_gnuplot("SA Trajectory - " + instance_name + "_T" + std::to_string(initial_temp) + "_C" + std::to_string(cooling_rate));
         std::cout << "Run SA" << std::endl;
         std::vector<int> current = generate_initial_solution();
         std::vector<int> best = current;
@@ -232,7 +234,7 @@ public:
         std::cout << "SA Result: " << current_makespan << std::endl;;
 
         update_plot();
-        save_plot(save_dir, "SA", instance_name, best_makespan);
+        save_plot(save_dir, "SA", instance_name + "_T" + std::to_string(initial_temp) + "_C" + std::to_string(cooling_rate), best_makespan);
         close_gnuplot();
         return best;
     }
@@ -301,6 +303,89 @@ public:
         close_gnuplot();
         return best;
     }
+
+    std::vector<int> tabu_search2(const std::string &instance_name, const std::string &save_dir, int max_iter = 500, int tabu_tenure = 10){
+        init_gnuplot("TS2 Trajectory - " + instance_name);
+        std::cout << "Run TS2 (Permutation Hash)" << std::endl;
+        std::vector<int> current = generate_initial_solution();
+        std::vector<int> best = current;
+        int current_makespan = evaluator.run_scheduling(current);
+        int best_makespan = current_makespan;
+
+        // 使用 Hash Map 來記錄每個排列的解禁代數
+        std::unordered_map<uint64_t, int> tabu_list;
+
+        // 定義 Hash 函數 (Polynomial Rolling Hash)
+        auto compute_hash = [](const std::vector<int> &arr) -> uint64_t{
+            uint64_t hash_val = 0;
+            uint64_t p_pow = 1;
+            const uint64_t p = 313; // 質數 base
+            // modulo 2^64 會透過 uint64_t 的自然溢位自動達成
+            for(size_t i = 0; i < arr.size(); ++i){
+                hash_val += (arr[i] + 1) * p_pow;
+                p_pow *= p;
+            }
+            return hash_val;
+        };
+
+        // 記錄初始解的 Hash
+        tabu_list[compute_hash(current)] = 0;
+
+        for(int iter = 0; iter < max_iter; ++iter){
+            std::vector<int> best_neighbor;
+            int best_neighbor_makespan = 1e9;
+            uint64_t best_neighbor_hash = 0;
+            bool found_valid_neighbor = false;
+
+            for(int i = 0; i < num_jobs - 1; ++i){
+                for(int j = i + 1; j < num_jobs; ++j){
+                    std::vector<int> neighbor = current;
+                    std::swap(neighbor[i], neighbor[j]);
+
+                    uint64_t current_hash = compute_hash(neighbor);
+                    int makespan = evaluator.run_scheduling(neighbor);
+
+                    // 檢查該排列是否在禁忌期內
+                    bool is_tabu = (tabu_list.count(current_hash) && tabu_list[current_hash] > iter);
+                    bool aspiration = makespan < best_makespan;
+
+                    if(!is_tabu || aspiration){
+                        if(makespan < best_neighbor_makespan){
+                            best_neighbor_makespan = makespan;
+                            best_neighbor = neighbor;
+                            best_neighbor_hash = current_hash;
+                            found_valid_neighbor = true;
+                        }
+                    }
+                }
+            }
+
+            if(found_valid_neighbor){
+                current = best_neighbor;
+                current_makespan = best_neighbor_makespan;
+
+                // 將步入的該排列 Hash 記錄到禁忌表中，設定解禁代數
+                tabu_list[best_neighbor_hash] = iter + tabu_tenure;
+
+                if(current_makespan < best_makespan){
+                    best = current;
+                    best_makespan = current_makespan;
+                }
+            }
+            else{ break; } // 若所有鄰居皆被禁忌且無法特赦，則提早結束
+
+            best_makespan_history.push_back(best_makespan);
+            makespan_history.push_back(current_makespan);
+
+            if(iter % 10 == 0) update_plot();
+        }
+
+        std::cout << "TS2 Result: " << best_makespan << std::endl;
+        update_plot();
+        save_plot(save_dir, "TS2", instance_name, best_makespan);
+        close_gnuplot();
+        return best;
+    }
 };
 
 void calculate_and_write_stats(std::ofstream &csv, const std::string &name, const std::vector<int> &data){
@@ -336,38 +421,59 @@ int main(){
 
             std::vector<int> ii_results(NUM_RUNS);
             std::vector<int> sa_results(NUM_RUNS);
+            std::vector<int> sa_results2(NUM_RUNS);
+            std::vector<int> sa_results3(NUM_RUNS);
+            std::vector<int> sa_results4(NUM_RUNS);
             std::vector<int> ts_results(NUM_RUNS);
+            std::vector<int> ts_results2(NUM_RUNS);
 
             for(int run = 1; run <= NUM_RUNS; ++run){
-                fs::create_directories("./Test_" + std::to_string(run));
+                fs::create_directories("./img/Test_" + std::to_string(run));
             }
 
-            #pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic)
             for(int run = 1; run <= NUM_RUNS; ++run){
-                std::string save_dir = "./Test_" + std::to_string(run);
+                std::string save_dir = "./img/Test_" + std::to_string(run);
 
                 MetaheuristicSolver solver(scheduler, tc.num_jobs);
                 solver.set_live_plot(false);
 
-                std::vector<int> ii_res = solver.iterative_improvement(tc.instance_name, save_dir, 1000);
-                ii_results[run - 1] = scheduler.run_scheduling(ii_res);
+                // std::vector<int> ii_res = solver.iterative_improvement(tc.instance_name, save_dir, 1000);
+                // ii_results[run - 1] = scheduler.run_scheduling(ii_res);
 
-                std::vector<int> sa_res = solver.simulated_annealing(tc.instance_name, save_dir, 100.0, 0.95, 1000);
+                std::vector<int> sa_res = solver.simulated_annealing(tc.instance_name, save_dir, 1000.0, 0.95, 1000);
                 sa_results[run - 1] = scheduler.run_scheduling(sa_res);
 
-                std::vector<int> ts_res = solver.tabu_search(tc.instance_name, save_dir, 1000, 10);
-                ts_results[run - 1] = scheduler.run_scheduling(ts_res);
+                std::vector<int> sa_res2 = solver.simulated_annealing(tc.instance_name, save_dir, 100.0, 0.95, 1000);
+                sa_results2[run - 1] = scheduler.run_scheduling(sa_res2);
 
-                #pragma omp critical
+                std::vector<int> sa_res3 = solver.simulated_annealing(tc.instance_name, save_dir, 1000.0, 0.8, 1000);
+                sa_results3[run - 1] = scheduler.run_scheduling(sa_res3);
+
+                std::vector<int> sa_res4 = solver.simulated_annealing(tc.instance_name, save_dir, 100.0, 0.8, 1000);
+                sa_results4[run - 1] = scheduler.run_scheduling(sa_res4);
+
+
+                // std::vector<int> ts_res = solver.tabu_search(tc.instance_name, save_dir, 1000, 10);
+                // ts_results[run - 1] = scheduler.run_scheduling(ts_res);
+
+                // std::vector<int> ts_res2 = solver.tabu_search2(tc.instance_name, save_dir, 1000, 10);
+                // ts_results2[run - 1] = scheduler.run_scheduling(ts_res2);
+
+
+#pragma omp critical
                 {
                     std::cout << "  - 第 " << run << " 次執行完成，圖片已儲存至 " << save_dir << "\n";
                 }
             }
 
             csv_file << tc.instance_name << ",";
-            calculate_and_write_stats(csv_file, "II", ii_results);
-            calculate_and_write_stats(csv_file, "SA", sa_results);
-            calculate_and_write_stats(csv_file, "TS", ts_results);
+            // calculate_and_write_stats(csv_file, "II", ii_results);
+            // calculate_and_write_stats(csv_file, "SA", sa_results);
+            calculate_and_write_stats(csv_file, "SA_T1000_C0.95", sa_results);
+            calculate_and_write_stats(csv_file, "SA_T100_C0.95", sa_results2);
+            calculate_and_write_stats(csv_file, "SA_T1000_C0.8", sa_results3);
+            calculate_and_write_stats(csv_file, "SA_T100_C0.8", sa_results4);
             csv_file << "\n";
 
             std::cout << ">> " << tc.instance_name << " 統計資料已寫入 results.csv\n";
