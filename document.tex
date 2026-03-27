@@ -50,17 +50,15 @@ Taipei, Taiwan(R.O.C) \\
 
 
 \maketitle
-\section{問題定義}
 
 \begin{abstract}
 
 \end{abstract}
 
 \section{Introduction}
-在傳統直接式演算法中，在處理NP問題時會遇到非常嚴重的複雜度瓶頸，而啟發式演算法可以透過迭代，在固定時間下取得十分近似正確解答案，而該研究透過三種演算法分別是Iterative Improvement、Simulated Annealing、Tabu Search，並且測試不同的退火參數以及 Tabu Tenure Object來測試運行解果。
+在傳統直接式演算法中，在處理NP問題時會遇到非常嚴重的複雜度瓶頸，而啟發式演算法可以透過迭代，能在固定時間下取得十分近似正確解答案，而該研究透過三種演算法分別是Iterative Improvement、Simulated Annealing、Tabu Search，並且測試不同的退火參數以及 Tabu Tenure Object來測試運行結果。
 
 
-\subsection 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -115,7 +113,7 @@ Taipei, Taiwan(R.O.C) \\
 
 
 \subsection{Simulated Annealing}
-模擬退火法引入機率機制以跳脫局部最佳解。其\textbf{冷卻時程 (Cooling Schedule)}採用幾何降溫模型，相關數學關係與參數如下：
+模擬退火法引入機率機制以跳脫區域最佳解。其\textbf{冷卻時程 (Cooling Schedule)}採用幾何降溫模型，相關數學關係與參數如下：
 \begin{equation}
     T_{k+1} = \alpha \times T_k
 \end{equation}
@@ -151,18 +149,95 @@ Taipei, Taiwan(R.O.C) \\
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \section{Experiment}
+\fontsize{10pt}{12pt}\selectfont
 
+本研究針對 Taillard 測試案例進行實驗，每個案例重複執行 20 次以確保統計穩定性。
 \subsection{Different Algorithm}
 % 不同演算法(II、SA、TS)
+如表 \ref{tab:algos} 所示，比較 II、SA 與 TS 三種演算法。
+實驗結果顯示，\textbf{TS (Tabu Search)} 在所有測試案例中均獲得最低的完工時間 (Makespan)，
+特別是在大型測資（如 tai100 系列）中，其平均值 (Avg) 顯著優於 II 與 SA。
+本實驗結果顯示禁忌搜尋透過記憶機制能更有效地引導搜尋過程離開區域最佳解。
+\begin{table}[htbp]
+\caption{不同演算法之結果比較}
+\label{tab:algos}
+\centering
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc|ccc}
+\hline
+Instance & \multicolumn{3}{c|}{II} & \multicolumn{3}{c|}{SA} & \multicolumn{3}{c}{TS} \\
+ & Min & Avg & Max & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai20\_5\_1   & 1297 & 1331.5 & 1377 & 1297 & 1305.2 & 1358 & \textbf{1278} & \textbf{1297.8} & 1324 \\
+tai20\_10\_1  & 1624 & 1676.8 & 1770 & 1607 & 1654.0 & 1686 & \textbf{1582} & \textbf{1587.7} & 1597 \\
+tai100\_5\_1  & 5527 & 5559.3 & 5628 & 5512 & 5558.3 & 5626 & \textbf{5495} & \textbf{5513.7} & 5529 \\
+tai100\_10\_1 & 6004 & 6107.5 & 6230 & 5995 & 6064.3 & 6127 & \textbf{5796} & \textbf{5845.1} & 5912 \\ \hline
+\end{tabular}
+}
+\end{table}
+
+
 
 \subsection{Different Cooling Parameter for SA}
 % 不同冷卻參數的差別
+針對模擬退火法，我們測試了初始溫度 $T$ 與冷卻率 $\alpha$ 的組合。
+由表 \ref{tab:sa_para} 可見，較高的初始溫度 ($T=1000$) 配合較慢的降溫率 ($\alpha=0.95$)，
+雖然計算開銷較大，但在大型測資（如 tai100\_20\_1）中能獲得較佳的 Min 與 Avg。
+快速降溫 ($\alpha=0.8$) 雖然收斂快，但容易過早陷入區域最佳解。
+
+
+\begin{table}[htbp]
+\caption{SA 不同參數組合對結果之影響}
+\label{tab:sa_para}
+\centering
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc|ccc}
+\hline
+Instance & \multicolumn{3}{c|}{$T=1000, \alpha=0.95$} & \multicolumn{3}{c|}{$T=100, \alpha=0.95$} & \multicolumn{3}{c}{$T=1000, \alpha=0.8$} \\
+ & Min & Avg & Max & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai100\_5\_1  & 5507 & 5547.3 & 5573 & 5500 & 5556.7 & 5616 & 5500 & 5555.5 & 5613 \\
+tai100\_10\_1 & 5981 & 6090.4 & 6166 & 5986 & 6084.2 & 6192 & 5983 & 6076.9 & 6165 \\
+tai100\_20\_1 & \textbf{6732} & \textbf{6842.4} & 6976 & 6744 & 6854.2 & 6927 & 6769 & 6869.2 & 7024 \\ \hline
+\end{tabular}
+}
+\end{table}
+
+
 
 \subsection{Different Length of Tabu Tenure for TS}
 % 不同Tabu List長度的差別
 
+
+
 \subsection{Different Storing Objective for TS}
 % 不同Tabu List記憶內容的差別
+最後比較移動禁忌 (Move-based) 與 狀態雜湊禁忌 (State-based Hash)。如表 \ref{tab:ts_logic} 所示，移動禁忌在多數情況下的平均完工時間與搜尋穩定性均優於狀態雜湊禁忌。
+如表 \ref{tab:ts_logic} 所示，\textbf{移動禁忌} 在多數情況下的平均完工時間均優於雜湊禁忌。
+分析原因在於，雜湊禁忌僅能防止回到「完全相同」的解，對於鄰域中極其相似的解空間缺乏約束力，
+而移動禁忌則能強制搜尋跳脫目前的結構區域。
+\begin{table}[htbp]
+\caption{Move-based 與 State-based Hash 之效能比較}
+\label{tab:ts_logic}
+\centering
+\addtolength{\tabcolsep}{-3pt} % 稍微縮減欄間距以適應雙欄版面
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc}
+\hline
+\textbf{Instance} & \multicolumn{3}{c|}{\textbf{TS (Move-based)}} & \multicolumn{3}{c}{\textbf{TS2 (State-based)}} \\
+ & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai20\_5\_1   & \textbf{1278} & \textbf{1306.00} & 1339 & 1297 & 1326.15 & 1377 \\
+tai20\_10\_1  & \textbf{1582} & \textbf{1586.90} & 1596 & 1586 & 1622.85 & 1671 \\
+tai20\_20\_1  & \textbf{2298} & \textbf{2318.65} & 2353 & 2309 & 2361.65 & 2435 \\ \hline
+tai50\_5\_1   & \textbf{2724} & \textbf{2725.25} & 2735 & 2724 & 2730.05 & 2761 \\
+tai50\_10\_1  & \textbf{3053} & \textbf{3093.15} & 3151 & 3081 & 3129.70 & 3167 \\
+tai50\_20\_1  & \textbf{3916} & \textbf{3941.40} & 3971 & 3943 & 4038.50 & 4124 \\ \hline
+tai100\_5\_1  & \textbf{5495} & \textbf{5512.10} & 5564 & 5495 & 5518.45 & 5564 \\
+tai100\_10\_1 & \textbf{5785} & \textbf{5831.70} & 5912 & 5800 & 5895.85 & 5969 \\
+tai100\_20\_1 & \textbf{6394} & \textbf{6449.60} & 6528 & 6453 & 6540.45 & 6614 \\ \hline
+\end{tabular}
+}
+\end{table}
+
+
 
 \section{Conclusion}
 
