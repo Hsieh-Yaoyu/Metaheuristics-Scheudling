@@ -51,7 +51,23 @@ Taipei, Taiwan(R.O.C) \\
 
 \maketitle
 \section{問題定義}
-{\fontsize{10pt}{12pt}\selectfont
+
+\begin{abstract}
+
+\end{abstract}
+
+\section{Introduction}
+在傳統直接式演算法中，在處理NP問題時會遇到非常嚴重的複雜度瓶頸，而啟發式演算法可以透過迭代，在固定時間下取得十分近似正確解答案，而該研究透過三種演算法分別是Iterative Improvement、Simulated Annealing、Tabu Search，並且測試不同的退火參數以及 Tabu Tenure Object來測試運行解果。
+
+
+\subsection 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Related Work}
+%這邊著重在介紹演算法，實作細節在Implement Detail
+\subsection{Scheduling Problem}
+% {\fontsize{10pt}{12pt}\selectfont
 定序流線型工廠排程問題 (Permutation Flowshop Scheduling Problem, PFSP)
 旨在決定 $n$ 個工作在 $m$ 台機器上的最佳加工順序。
 
@@ -72,13 +88,8 @@ Taipei, Taiwan(R.O.C) \\
     C(\pi_k, i) = \max\{C(\pi_{k-1}, i), C(\pi_k, i-1)\} + p_{i,\pi_k}
 \end{equation}
 最終目標為尋求一排列 $\pi^*$ 使得 $Z = C(\pi_n, m)$ 達最小值。
-}
+% }
 
-\section{軌跡式啟發式演算法}
-{\fontsize{10pt}{12pt}\selectfont
-本研究實作三種啟發式演算法以求解 PFSP 問題。各個演算法皆基於鄰域搜尋架構，透過不同的接受準則與搜尋策略，在解空間中尋找近似最佳解。以下詳述各演算法之實現細節。
-
-\subsection{共通部分}
 本實驗之演算法實作包含以下兩個核心要素：
 \begin{itemize}
     \setlength{\itemsep}{0pt}
@@ -86,13 +97,24 @@ Taipei, Taiwan(R.O.C) \\
     \item \textbf{鄰域函式 (Neighborhood Function)}：採用交換移動 (Swap)。定義鄰域運算為隨機選取序列中兩個位置並交換其內容，以產生新的可行解。
 \end{itemize}
 
-\subsection{反覆改善法 (\textnormal{Iterative Improvement, II})}
+\section{Trajectory-based Metaheuristics Algorithum}
+% {\fontsize{10pt}{12pt}\selectfont
+本研究實作三種啟發式演算法以求解 PFSP 問題。各個演算法皆基於鄰域搜尋架構，透過不同的接受準則與搜尋策略，在解空間中尋找近似最佳解。以下詳述各演算法之實現細節。
+
+
+
+
+\subsection{Iterative Improvement} 
+% 介紹工作排程問題
 反覆改善法採貪婪策略。其\textbf{接受條件 (Acceptance Criterion)}為：僅當鄰近解 $\pi'$ 的目標值優於當前解 $\pi$ 時，方接受更新。其邏輯如下式：
 \begin{equation}
     f(\pi') < f(\pi)
 \end{equation}
 
-\subsection{模擬退火法 (Simulated Annealing, SA)}
+
+
+
+\subsection{Simulated Annealing}
 模擬退火法引入機率機制以跳脫局部最佳解。其\textbf{冷卻時程 (Cooling Schedule)}採用幾何降溫模型，相關數學關係與參數如下：
 \begin{equation}
     T_{k+1} = \alpha \times T_k
@@ -102,34 +124,18 @@ Taipei, Taiwan(R.O.C) \\
 \end{equation}
 其中變數 $\alpha$ 為冷卻率（設定於第 III-B 節），$T$ 為當前溫度。當 $\Delta f > 0$（即新解較差）時，仍有 $P$ 之機率接受該解。
 
-\subsection{禁忌搜尋法 (Tabu Search, TS)}
-禁忌搜尋法利用記憶機制避免重複搜尋。其\textbf{禁忌列表 (Tabu List)} 儲存的是最近執行的交換動作（即工作對及其位置），旨在防止搜尋過程回流至已探索區域。
-此外，本實作包含\textbf{渴望條件 (Aspiration Criterion)}：若某一受禁忌限制的移動能產生優於目前史上最佳解 $f_{best}$ 的結果，則無視禁忌狀態強制接受該移動。
-}
 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\section{Related Work}
-%這邊著重在介紹演算法，實作細節在Implement Detail
-
-\subsection{Scheduling Problem}
-% 介紹工作排程問題
-
-\subsection{Iterative Improvement} 
-
-\subsection{Simulated Annealing}
 
 \subsection{Tabu Search}
+禁忌搜尋法利用記憶機制避免重複搜尋。其\textbf{禁忌列表 (Tabu List)} 儲存的是最近執行的交換動作（即工作對及其位置），旨在防止搜尋過程回流至已探索區域。
+此外，本實作包含\textbf{渴望條件 (Aspiration Criterion)}：若某一受禁忌限制的移動能產生優於目前史上最佳解 $f_{best}$ 的結果，則無視禁忌狀態強制接受該移動。
+% }
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Implement Detail}
 
-\subsection{Neighborhood}
-
 \subsection{Scheduling Problem}
-
 
 \subsection{Iterative Improvement} 
 
