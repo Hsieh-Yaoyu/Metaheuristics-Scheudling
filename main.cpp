@@ -426,6 +426,7 @@ int main(){
             std::vector<int> sa_results4(NUM_RUNS);
             std::vector<int> ts_results(NUM_RUNS);
             std::vector<int> ts_results2(NUM_RUNS);
+            std::vector<int> ts_results3(NUM_RUNS);
 
             for(int run = 1; run <= NUM_RUNS; ++run){
                 fs::create_directories("./img/Test_" + std::to_string(run));
@@ -441,21 +442,28 @@ int main(){
                 // std::vector<int> ii_res = solver.iterative_improvement(tc.instance_name, save_dir, 1000);
                 // ii_results[run - 1] = scheduler.run_scheduling(ii_res);
 
-                std::vector<int> sa_res = solver.simulated_annealing(tc.instance_name, save_dir, 1000.0, 0.95, 1000);
-                sa_results[run - 1] = scheduler.run_scheduling(sa_res);
+                // std::vector<int> sa_res = solver.simulated_annealing(tc.instance_name, save_dir, 1000.0, 0.95, 1000);
+                // sa_results[run - 1] = scheduler.run_scheduling(sa_res);
 
-                std::vector<int> sa_res2 = solver.simulated_annealing(tc.instance_name, save_dir, 100.0, 0.95, 1000);
-                sa_results2[run - 1] = scheduler.run_scheduling(sa_res2);
+                // std::vector<int> sa_res2 = solver.simulated_annealing(tc.instance_name, save_dir, 100.0, 0.95, 1000);
+                // sa_results2[run - 1] = scheduler.run_scheduling(sa_res2);
 
-                std::vector<int> sa_res3 = solver.simulated_annealing(tc.instance_name, save_dir, 1000.0, 0.8, 1000);
-                sa_results3[run - 1] = scheduler.run_scheduling(sa_res3);
+                // std::vector<int> sa_res3 = solver.simulated_annealing(tc.instance_name, save_dir, 1000.0, 0.8, 1000);
+                // sa_results3[run - 1] = scheduler.run_scheduling(sa_res3);
 
-                std::vector<int> sa_res4 = solver.simulated_annealing(tc.instance_name, save_dir, 100.0, 0.8, 1000);
-                sa_results4[run - 1] = scheduler.run_scheduling(sa_res4);
+                // std::vector<int> sa_res4 = solver.simulated_annealing(tc.instance_name, save_dir, 100.0, 0.8, 1000);
+                // sa_results4[run - 1] = scheduler.run_scheduling(sa_res4);
 
 
-                // std::vector<int> ts_res = solver.tabu_search(tc.instance_name, save_dir, 1000, 10);
-                // ts_results[run - 1] = scheduler.run_scheduling(ts_res);
+                std::vector<int> ts_res = solver.tabu_search(tc.instance_name + "TS_L15", save_dir, 1000, 15);
+                ts_results[run - 1] = scheduler.run_scheduling(ts_res);
+
+                std::vector<int> ts_res2 = solver.tabu_search(tc.instance_name + "TS_L10", save_dir, 1000, 10);
+                ts_results2[run - 1] = scheduler.run_scheduling(ts_res2);
+
+                std::vector<int> ts_res3 = solver.tabu_search(tc.instance_name + "TS_L5", save_dir, 1000, 5);
+                ts_results3[run - 1] = scheduler.run_scheduling(ts_res3);
+
 
                 // std::vector<int> ts_res2 = solver.tabu_search2(tc.instance_name, save_dir, 1000, 10);
                 // ts_results2[run - 1] = scheduler.run_scheduling(ts_res2);
@@ -470,10 +478,11 @@ int main(){
             csv_file << tc.instance_name << ",";
             // calculate_and_write_stats(csv_file, "II", ii_results);
             // calculate_and_write_stats(csv_file, "SA", sa_results);
-            calculate_and_write_stats(csv_file, "SA_T1000_C0.95", sa_results);
-            calculate_and_write_stats(csv_file, "SA_T100_C0.95", sa_results2);
-            calculate_and_write_stats(csv_file, "SA_T1000_C0.8", sa_results3);
-            calculate_and_write_stats(csv_file, "SA_T100_C0.8", sa_results4);
+            calculate_and_write_stats(csv_file, "TS_L15", ts_results);
+            calculate_and_write_stats(csv_file, "TS_L10", ts_results2);
+            calculate_and_write_stats(csv_file, "TS_L5", ts_results3);
+            // calculate_and_write_stats(csv_file, "SA_T1000_C0.8", sa_results3);
+            // calculate_and_write_stats(csv_file, "SA_T100_C0.8", sa_results4);
             csv_file << "\n";
 
             std::cout << ">> " << tc.instance_name << " 統計資料已寫入 results.csv\n";

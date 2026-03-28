@@ -120,12 +120,12 @@ Taipei, Taiwan(R.O.C) \\
 \begin{equation}
     P(\text{accept}) = \exp\left( \frac{-\Delta f}{T} \right)
 \end{equation}
-其中變數 $\alpha$ 為冷卻率（設定於第 III-B 節），$T$ 為當前溫度。當 $\Delta f > 0$（即新解較差）時，仍有 $P$ 之機率接受該解。
+其中變數 $\alpha$ 為冷卻率(設定於第 III-B 節)，$T$ 為當前溫度。當 $\Delta f > 0$(即新解較差)時，仍有 $P$ 之機率接受該解。
 
 
 
 \subsection{Tabu Search}
-禁忌搜尋法利用記憶機制避免重複搜尋。其\textbf{禁忌列表 (Tabu List)} 儲存的是最近執行的交換動作（即工作對及其位置），旨在防止搜尋過程回流至已探索區域。
+禁忌搜尋法利用記憶機制避免重複搜尋。其\textbf{禁忌列表 (Tabu List)} 儲存的是最近執行的交換動作(即工作對及其位置)，旨在防止搜尋過程回流至已探索區域。
 此外，本實作包含\textbf{渴望條件 (Aspiration Criterion)}：若某一受禁忌限制的移動能產生優於目前史上最佳解 $f_{best}$ 的結果，則無視禁忌狀態強制接受該移動。
 % }
 
@@ -134,17 +134,49 @@ Taipei, Taiwan(R.O.C) \\
 \section{Implement Detail}
 
 \subsection{Scheduling Problem}
+本研究針對排列流水線排程問題（Permutation Flowshop Scheduling Problem）設計了 \texttt{Scheduling} 類別作為評估函數（Evaluator）。給定一組工作的排列順序（Order），系統會依序將工作排入機器中。假設共有 $m$ 台機器，系統會維護一個大小為 $m$ 的陣列 \texttt{machine\_end\_time} 來記錄每台機器的最早可用時間。
+
+對於排列中的每一個工作，其在第 $m_i$ 台機器的開始時間取決於「該工作在前一台機器的完工時間」與「第 $m_i$ 台機器的最早可用時間」兩者中的最大值：
+$$start\_time =$$
+$$ \max(current\_job\_ready\_time, machine\_end\_time[m_i])$$
+接著將 $start\_time$ 加上該工作在該機器的處理時間 $job\_mtx[m_i][job]$ 即為完工時間。依此邏輯計算至最後一台機器，最後一個工作的完工時間即為該排程的總完工時間（Makespan）。
 
 \subsection{Iterative Improvement} 
+Iterative Improvement (II) 演算法在此實作中採用隨機爬山演算法（Stochastic Hill Climbing）的邏輯。演算法首先透過 \texttt{std::shuffle} 產生一組隨機排列作為初始解。在每一次迭代中，透過交換鄰域（Swap Neighborhood）隨機挑選兩個相異的索引位置並交換工作，產生一個相鄰解（Neighbor）。
+
+若該相鄰解的 Makespan 嚴格小於當前解的 Makespan，則演算法會接受該相鄰解並將其設為新的當前解；若較差或相等則捨棄。此過程重複執行指定的迭代次數（\texttt{max\_iter}），並記錄搜尋軌跡以供後續分析。
 
 \subsection{Simulated Annealing}
+模擬退火演算法（Simulated Annealing, SA）同樣採用交換鄰域隨機產生相鄰解。為了賦予演算法跳脫區域最佳解（Local Optima）的能力，SA 引入了 Metropolis 準則。
+
+令 $\Delta = neighbor\_makespan - current\_makespan$。若 $\Delta < 0$（解獲得改善），則無條件接受該相鄰解；若 $\Delta \ge 0$（解變差），則以機率 $P$ 決定是否接受該劣解：
+$$P = \exp\left(-\frac{\Delta}{T}\right)$$
+其中 $T$ 為當前溫度。每次迭代結束後，溫度會依據幾何降溫排程進行衰減：$T_{new} = T_{old} \times cooling\_rate$。演算法在過程中會持續追蹤並更新歷史最佳解（Global Best）。
 
 \subsection{Tabu Search}
-% 需要介紹兩種紀錄Tabu的方法
+禁忌搜尋（Tabu Search, TS）採用最佳改善（Best Improvement）策略，在每一代中透過雙層迴圈走訪所有 $O(n^2)$ 個可能的交換組合，並挑選出非禁忌狀態下（或符合特赦條件）的最佳相鄰解。為了避免演算法陷入循環，本實作設計了兩種不同的禁忌名單（Tabu List）記錄機制：
 
+\begin{itemize}
+    \item \textbf{Method 1: 基於動作的禁忌記錄 (Action-based Tabu List)} \\
+在 \texttt{tabu\_search} 函數中，禁忌名單實作為一個大小為 $n \times n$ 的二維陣列。當工作 $i$ 與工作 $j$ 被交換後，系統會將這對組合寫入陣列中，記錄其「解禁代數」。為了統一索引並節省空間，寫入時一律以 $\min(i, j)$ 為列、$\max(i, j)$ 為欄：
+$$tabu\_list[\min(i, j)][\max(i, j)] = $$
+$$ current\_iteration + tabu\_tenure$$
+在後續迭代中，若某個交換動作對應的陣列值大於當前代數，則視為禁忌狀態。
+    \item \textbf{Method 2: 基於排列狀態的禁忌記錄 (Permutation Hash-based Tabu List)} \\
+在 \texttt{tabu\_search2} 函數中，我們將禁忌對象從「交換動作」改為「整體的排列狀態」。為了高效比對狀態，實作中採用了多項式滾動雜湊（Polynomial Rolling Hash）：
+$$H = \sum_{k=0}^{n-1} (arr[k] + 1) \cdot p^k \pmod q$$
+其中 $arr[k]$ 為排列中第 $k$ 個位置的工作 ID，質數 $p$ 設為 $313$。模數 $q$ 則巧妙利用 C++ 中 \texttt{uint64\_t} 型態的自然溢位特性，等同於 $q = 2^{64}$。每次步入新的排列狀態後，會將其 Hash 值存入 \texttt{std::unordered\_map} 並記錄解禁代數。此方法能更嚴格地避免走訪重複的解空間。
+
+\end{itemize}
+
+
+\textbf{特赦條件 (Aspiration Criterion)} \\
+無論使用何種記錄方式，若產生的相鄰解其 Makespan 嚴格小於歷史最佳解（Global Best），則觸發特赦機制，演算法將無視禁忌狀態強制接受該解。
 
 \subsection{Gnuplot Visualizer}
+為了直觀分析演算法的收斂行為與跳脫區域最佳解的過程，本實作內建了基於 \texttt{Gnuplot} 的視覺化工具。程式透過 \texttt{popen} 開啟 \texttt{gnuplot} 的行程通訊（Pipe），並利用標準輸入字元 \texttt{'-'} 將 C++ 陣列中的 \texttt{best\_makespan\_history} 與 \texttt{makespan\_history} 即時傳遞給繪圖引擎。
 
+在大量平行測試的環境下，系統會透過 \texttt{save\_plot} 函數在背景靜默生成圖表。該函數會自動切換 Gnuplot 的 \texttt{terminal} 為 \texttt{jpeg}，並根據演算法名稱、測資名稱及最佳解數值自動命名檔案存入指定目錄，確保實驗數據的可重現性與易讀性。
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -156,7 +188,7 @@ Taipei, Taiwan(R.O.C) \\
 % 不同演算法(II、SA、TS)
 如表 \ref{tab:algos} 所示，比較 II、SA 與 TS 三種演算法。
 實驗結果顯示，\textbf{TS (Tabu Search)} 在所有測試案例中均獲得最低的完工時間 (Makespan)，
-特別是在大型測資（如 tai100 系列）中，其平均值 (Avg) 顯著優於 II 與 SA。
+特別是在大型測資(如 tai100 系列)中，其平均值 (Avg) 顯著優於 II 與 SA。
 本實驗結果顯示禁忌搜尋透過記憶機制能更有效地引導搜尋過程離開區域最佳解。
 \begin{table}[htbp]
 \caption{不同演算法之結果比較}
@@ -181,7 +213,7 @@ tai100\_10\_1 & 6004 & 6107.5 & 6230 & 5995 & 6064.3 & 6127 & \textbf{5796} & \t
 % 不同冷卻參數的差別
 針對模擬退火法，我們測試了初始溫度 $T$ 與冷卻率 $\alpha$ 的組合。
 由表 \ref{tab:sa_para} 可見，較高的初始溫度 ($T=1000$) 配合較慢的降溫率 ($\alpha=0.95$)，
-雖然計算開銷較大，但在大型測資（如 tai100\_20\_1）中能獲得較佳的 Min 與 Avg。
+雖然計算開銷較大，但在大型測資(如 tai100\_20\_1)中能獲得較佳的 Min 與 Avg。
 快速降溫 ($\alpha=0.8$) 雖然收斂快，但容易過早陷入區域最佳解。
 
 
@@ -205,8 +237,33 @@ tai100\_20\_1 & \textbf{6732} & \textbf{6842.4} & 6976 & 6744 & 6854.2 & 6927 & 
 
 \subsection{Different Length of Tabu Tenure for TS}
 % 不同Tabu List長度的差別
+本實驗進一步分析禁忌長度（Tabu Tenure, $L$）對搜尋表現的影響。如表 \ref{tab:ts_para} 所示，較長的禁忌期（$L=15$ 與 $L=10$）在多數測資中的整體表現（特別是平均完工時間）明顯優於較短的禁忌期（$L=5$）。
+
+分析原因在於，當 $L=5$ 時禁忌名單過短，導致演算法容易在少數幾個區域最佳解之間發生循環（Cycling），缺乏足夠的多樣化（Diversification）能力來探索未知的解空間。反之，適當增加禁忌長度能有效強迫搜尋軌跡遠離已造訪過的結構；其中 $L=10$ 在部分小型測資（如 tai20 系列）能靈活找到更低的最小值（Min），而 $L=15$ 則在大型測資（如 tai100 系列）中展現出更強的探索能力與更穩定的平均收斂品質。
 
 
+\begin{table}[htbp]
+\caption{TS 不同禁忌長度對結果之影響}
+\label{tab:ts_para}
+\centering
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc|ccc}
+\hline
+Instance & \multicolumn{3}{c|}{$L=15$} & \multicolumn{3}{c|}{$L=10$} & \multicolumn{3}{c}{$L=5$} \\
+ & Min & Avg & Max & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai100\_10\_1 & 5800 & 5840.80 & 5912 & \textbf{5799} & 5849.45 & 5912 & 5828 & 5898.80 & 5939 \\ 
+tai100\_20\_1 & \textbf{6386} & 6439.70 & 6514 & 6413 & 6453.15 & 6501 & 6415 & 6490.85 & 6582 \\ 
+tai100\_5\_1 & \textbf{5495} & 5517.30 & 5546 & \textbf{5495} & 5517.75 & 5564 & \textbf{5495} & 5520.40 & 5546 \\ 
+tai20\_10\_1 & 1583 & 1589.00 & 1595 & \textbf{1582} & 1589.50 & 1599 & 1583 & 1603.30 & 1653 \\ 
+tai20\_20\_1 & 2303 & 2324.40 & 2357 & \textbf{2302} & 2313.15 & 2346 & \textbf{2302} & 2345.05 & 2392 \\ 
+tai20\_5\_1 & 1283 & 1296.95 & 1305 & \textbf{1278} & 1305.25 & 1339 & \textbf{1278} & 1309.30 & 1339 \\ 
+tai50\_10\_1 & \textbf{3046} & 3082.00 & 3135 & 3048 & 3083.05 & 3131 & \textbf{3046} & 3113.35 & 3160 \\ 
+tai50\_20\_1 & \textbf{3920} & 3942.35 & 4045 & 3921 & 3949.10 & 4010 & 3934 & 3988.75 & 4055 \\ 
+tai50\_5\_1 & \textbf{2724} & 2743.80 & 2758 & \textbf{2724} & 2745.70 & 2774 & \textbf{2724} & 2744.85 & 2774 \\ 
+\hline
+\end{tabular}
+}
+\end{table}
 
 \subsection{Different Storing Objective for TS}
 % 不同Tabu List記憶內容的差別
