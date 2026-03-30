@@ -1,5 +1,5 @@
 *.exe
-*.jpg
+img*
 document.aux
 document.fls
 document.log
