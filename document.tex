@@ -1,0 +1,470 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{subcaption}
+
+% ====== 新增以下這段來支援中文 ======
+\usepackage{xeCJK}
+\setmainfont{Times New Roman}
+% 設定主要的繁體中文字體，您可以根據您的作業系統或編譯環境更改
+%\setCJKmainfont{Noto Sans TC} % Windows 常用的字體
+\setCJKmainfont{標楷體}   % 如果想要比較正式的襯線字體
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{Genetic Algorithm for Machine Scheduling\\
+{\footnotesize 基於基因演化演算法解決機器排程問題}
+% \thanks{Identify applicable funding agency here. If none, delete this.}
+}
+
+
+\author{\IEEEauthorblockN{1\textsuperscript{st} Hung Ming-Chun}
+\IEEEauthorblockA{\textit{Department of Computer Science and} \\
+\textit{Information Engineering}\\
+\textit{National Taiwan Normal University}\\
+Taipei, Taiwan(R.O.C) \\
+61447026s@ntnu.edu.tw}
+\and
+\IEEEauthorblockN{2\textsuperscript{nd} Hsieh Yao-yu}
+\IEEEauthorblockA{\textit{Graduate Institute of} \\
+\textit{Science Education}\\
+\textit{National Taiwan Normal University}\\
+Taipei, Taiwan(R.O.C) \\
+61345001s@ntnu.edu.tw}
+\and
+\IEEEauthorblockN{3\textsuperscript{rd} Given Name Surname}
+\IEEEauthorblockA{\textit{Department of Computer Science and} \\
+\textit{Information Engineering}\\
+\textit{National Taiwan Normal University}\\
+Taipei, Taiwan(R.O.C) \\
+@ntnu.edu.tw}
+}
+
+
+
+\maketitle
+
+\begin{abstract}
+
+定序流線型工廠排程問題 (PFSP) 屬於複雜的 NP-hard 組合優化問題，在現代製造業中具備高度應用價值。
+本研究旨在探討並比較三種元啟發式演算法：反覆改善法 (II)、模擬退火法 (SA) 及禁忌搜尋 (TS) 在解決該問題上的效能。
+實驗採用 Taillard 基準測試案例進行評估，並針對 SA 的降溫參數與 TS 的記憶機制進行靈敏度分析。
+實驗結果顯示，TS 在各類規模的測試案例中均表現出最優的收斂品質與穩定性。
+此外，本研究深入探討了禁忌名單的設計，對比了「動作禁忌 (Action-based)」與「排列狀態禁忌 (Permutation Hash-based)」的差異。
+結果證實，動作禁忌透過封鎖特定交換動作，能比僅記錄單一狀態的禁忌更有效地引導搜尋並跳脫區域最佳解。
+本研究之成果可作為未來開發高效能工業排程演算法之參考。
+\end{abstract}
+
+\section{Introduction}
+在傳統直接式演算法中，
+在處理NP問題時會遇到非常嚴重的複雜度瓶頸，
+而啟發式演算法可以透過迭代，
+能在固定時間下取得十分近似正確解答案，
+而該研究透過三種演算法分別是Iterative Improvement、Simulated Annealing、Tabu Search，
+並且測試不同的退火參數以及不同的禁忌記憶機制，以分析其對演算法的影響。
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Related Work}
+%這邊著重在介紹演算法，實作細節在Implement Detail
+\subsection{Scheduling Problem}
+% {\fontsize{10pt}{12pt}\selectfont
+定序流線型工廠排程問題 (Permutation Flowshop Scheduling Problem, PFSP)
+旨在決定 $n$ 個工作在 $m$ 台機器上的最佳加工順序。
+
+本實驗之輸入包含
+工作集合$J = \{j_1, j_2, \dots, j_n\}$、
+機器集合 $M = \{M_1, M_2, \dots, M_m\}$
+以及加工時間矩陣 $p_{i,j}$。
+
+核心限制條件如下：
+所有工作在各台機器上的加工順序 $\pi$ 必須完全一致，
+且機器在同一時間僅能處理單一工作，
+加工過程不可中斷。
+目標函數為極小化總完工時間(Makespan)，記作 $C_{max}$。
+
+定義 $C(\pi_k, i)$ 為位置 $k$ 的工作在機器 $i$ 的完工時間，
+其遞迴關係如下：
+\begin{equation}
+    C(\pi_k, i) = \max\{C(\pi_{k-1}, i), C(\pi_k, i-1)\} + p_{i,\pi_k}
+\end{equation}
+最終目標為尋求一排列 $\pi^*$ 使得 $Z = C(\pi_n, m)$ 達最小值。
+% }
+
+本實驗之演算法實作包含以下兩個核心要素：
+\begin{itemize}
+    \setlength{\itemsep}{0pt}
+    \item \textbf{解表示法 (Representation)}：採工作序列編碼。若有 $n$ 個工作，則解為一長度為 $n$ 的排列向量。
+    \item \textbf{鄰域函式 (Neighborhood Function)}：採用交換移動 (Swap)。定義鄰域運算為隨機選取序列中兩個位置並交換其內容，以產生新的可行解。
+\end{itemize}
+
+\section{Trajectory-based Metaheuristics Algorithm}
+% {\fontsize{10pt}{12pt}\selectfont
+本研究實作三種啟發式演算法以求解 PFSP 問題。
+各個演算法皆基於鄰域搜尋架構，透過不同的接受準則與搜尋策略，
+在解空間中尋找近似最佳解。以下詳述各演算法之實現細節。
+
+
+
+
+\subsection{Iterative Improvement} 
+% 介紹工作排程問題
+反覆改善法採貪婪策略。其\textbf{接受條件 (Acceptance Criterion)}為：
+僅當鄰近解 $\pi'$ 的目標值優於當前解 $\pi$ 時，方接受更新。
+其邏輯如下式：
+\begin{equation}
+    f(\pi') < f(\pi)
+\end{equation}
+
+
+
+
+\subsection{Simulated Annealing}
+模擬退火法引入機率機制以跳脫區域最佳解。其\textbf{冷卻時程 (Cooling Schedule)}採用幾何降溫模型，相關數學關係與參數如下：
+\begin{equation}
+    T_{k+1} = \alpha \times T_k
+\end{equation}
+\begin{equation}
+    P(\text{accept}) = \exp\left( \frac{-\Delta f}{T} \right)
+\end{equation}
+其中變數 $\alpha$ 為冷卻率(設定於第 III-B 節)，$T$ 為當前溫度。當 $\Delta f > 0$(即新解較差)時，仍有 $P$ 之機率接受該解。
+
+
+
+\subsection{Tabu Search}
+禁忌搜尋法利用記憶機制避免重複搜尋。
+其\textbf{禁忌名單 (Tabu List)} 儲存的是最近執行的交換動作(即工作對及其位置)，
+旨在防止搜尋過程回流至已探索區域。
+此外，本實作包含\textbf{特赦條件 (Aspiration Criterion)}：
+若某一受禁忌限制的移動能產生優於目前歷史最佳解 $f_{best}$ 的結果，則無視禁忌狀態強制接受該移動。
+% }
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Implement Details}
+
+\subsection{Scheduling Problem}
+本研究針對排列流水線排程問題（Permutation Flowshop Scheduling Problem）設計了 \texttt{Scheduling} 類別作為評估函數（Evaluator）。給定一組工作的排列順序（Order），系統會依序將工作排入機器中。假設共有 $m$ 台機器，系統會維護一個大小為 $m$ 的陣列 \texttt{machine\_end\_time} 來記錄每台機器的最早可用時間。
+
+對於排列中的每一個工作，其在第 $m_i$ 台機器的開始時間取決於「該工作在前一台機器的完工時間」與「第 $m_i$ 台機器的最早可用時間」兩者中的最大值：
+$$start\_time =$$
+$$ \max(current\_job\_ready\_time, machine\_end\_time[m_i])$$
+接著將 $start\_time$ 加上該工作在該機器的處理時間 $job\_mtx[m_i][job]$ 即為完工時間。依此邏輯計算至最後一台機器，最後一個工作的完工時間即為該排程的總完工時間（Makespan）。
+
+\subsection{Iterative Improvement} 
+Iterative Improvement (II) 演算法在此實作中採用隨機爬山演算法（Stochastic Hill Climbing）的邏輯。
+演算法首先透過 \texttt{std::shuffle} 產生一組隨機排列作為初始解。
+在每一次迭代中，透過交換鄰域（Swap Neighborhood）隨機挑選兩個相異的索引位置並交換工作，產生一個相鄰解（Neighbor）。
+
+若該相鄰解的 Makespan 嚴格小於當前解的 Makespan，則演算法會接受該相鄰解並將其設為新的當前解；若較差或相等則捨棄。此過程重複執行指定的迭代次數（\texttt{max\_iter}），並記錄搜尋軌跡以供後續分析。
+
+\subsection{Simulated Annealing}
+模擬退火演算法（Simulated Annealing, SA）同樣採用交換鄰域隨機產生相鄰解。為了賦予演算法跳脫區域最佳解（Local Optima）的能力，SA 引入了 Metropolis 準則。
+
+令 $\Delta = neighbor\_makespan - current\_makespan$。若 $\Delta < 0$（解獲得改善），則無條件接受該相鄰解；若 $\Delta \ge 0$（解變差），則以機率 $P$ 決定是否接受該劣解：
+$$P = \exp\left(-\frac{\Delta}{T}\right)$$
+其中 $T$ 為當前溫度。每次迭代結束後，溫度會依據幾何降溫排程進行衰減：$T_{new} = T_{old} \times cooling\_rate$。演算法在過程中會持續追蹤並更新歷史最佳解（Global Best）。
+
+\subsection{Tabu Search}
+禁忌搜尋（Tabu Search, TS）採用最佳改善（Best Improvement）策略，
+在每一代中透過雙層迴圈走訪所有 $O(n^2)$ 個可能的交換組合，
+並挑選出非禁忌狀態下（或符合特赦條件）的最佳相鄰解。
+為了避免演算法陷入循環，本實作設計了兩種不同的禁忌名單（Tabu List）記錄機制：
+
+\begin{itemize}
+    \item \textbf{Method 1: 基於動作的禁忌記錄 (Action-based Tabu List)} \\
+在 \texttt{tabu\_search} 函數中，禁忌名單實作為一個大小為 $n \times n$ 的二維陣列。
+當工作 $i$ 與工作 $j$ 被交換後，系統會將這對組合寫入陣列中，記錄其「解禁代數」。
+為了統一索引並節省空間，寫入時一律以 $\min(i, j)$ 為列、$\max(i, j)$ 為欄：
+$$tabu\_list[\min(i, j)][\max(i, j)] = $$
+$$ current\_iteration + tabu\_tenure$$
+在後續迭代中，若某個交換動作對應的陣列值大於當前代數，則視為禁忌狀態。
+    \item \textbf{Method 2: 基於排列狀態的禁忌記錄 (Permutation Hash-based Tabu List)} \\
+在 \texttt{tabu\_search2} 函數中，我們將禁忌對象從「交換動作」改為「整體的排列狀態」。
+為了高效比對狀態，實作中採用了多項式滾動雜湊（Polynomial Rolling Hash）：
+$$H = \sum_{k=0}^{n-1} (arr[k] + 1) \cdot p^k \pmod q$$
+其中 $arr[k]$ 為排列中第 $k$ 個位置的工作 ID，質數 $p$ 設為 $313$。模數 $q$ 則巧妙利用 C++ 中 \texttt{uint64\_t} 型態的自然溢位特性，等同於 $q = 2^{64}$。每次步入新的排列狀態後，會將其 Hash 值存入 \texttt{std::unordered\_map} 並記錄解禁代數。此方法能更嚴格地避免走訪重複的解空間。
+
+\end{itemize}
+
+
+\textbf{特赦條件 (Aspiration Criterion)} \\
+無論使用何種記錄方式，若產生的相鄰解其 Makespan 嚴格小於歷史最佳解（Global Best），則觸發特赦機制，演算法將無視禁忌狀態強制接受該解。
+
+\subsection{Gnuplot Visualizer}
+為了直觀分析演算法的收斂行為與跳脫區域最佳解的過程，本實作內建了基於 \texttt{Gnuplot} 的視覺化工具。程式透過 \texttt{popen} 開啟 \texttt{gnuplot} 的行程通訊（Pipe），並利用標準輸入字元 \texttt{'-'} 將 C++ 陣列中的 \texttt{best\_makespan\_history} 與 \texttt{makespan\_history} 即時傳遞給繪圖引擎。
+
+在大量平行測試的環境下，系統會透過 \texttt{save\_plot} 函數在背景靜默生成圖表。該函數會自動切換 Gnuplot 的 \texttt{terminal} 為 \texttt{jpeg}，並根據演算法名稱、測資名稱及最佳解數值自動命名檔案存入指定目錄，確保實驗數據的可重現性與易讀性。
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Experiment}
+\fontsize{10pt}{12pt}\selectfont
+
+本研究針對 Taillard 測試案例進行實驗，每個案例重複執行 20 次以確保統計穩定性。
+\subsection{Different Algorithm}
+% 不同演算法(II、SA、TS)
+如表 \ref{tab:algos} 所示，比較 II、SA 與 TS 三種演算法。
+實驗結果顯示，\textbf{TS (Tabu Search)} 在所有測試案例中均獲得最低的完工時間 ，
+特別是在大型測資(如 tai100 系列)中，其平均值 (Avg) 顯著優於 II 與 SA。
+本實驗結果顯示禁忌搜尋透過記憶機制能更有效地引導搜尋過程離開區域最佳解。
+\begin{table}[htbp]
+\caption{不同演算法之結果比較}
+\label{tab:algos}
+\centering
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc|ccc}
+\hline
+Instance & \multicolumn{3}{c|}{II} & \multicolumn{3}{c|}{SA} & \multicolumn{3}{c}{TS} \\
+ & Min & Avg & Max & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai20\_5\_1   & \textbf{1297} & 1331.50 & 1377 & \textbf{1297} & \textbf{1305.15} & 1339 & \textbf{1297} & 1317.20 & 1377 \\
+tai20\_10\_1  & 1624 & 1676.75 & 1770 & 1607 & 1654.00 & 1686 & \textbf{1582} & \textbf{1587.65} & 1597 \\
+tai20\_20\_1  & 2343 & 2408.85 & 2529 & 2336 & 2382.00 & 2441 & \textbf{2300} & \textbf{2319.90} & 2349 \\ \hline
+tai50\_5\_1   & 2735 & 2759.95 & 2786 & 2736 & 2756.80 & 2780 & \textbf{2729} & \textbf{2747.55} & 2774 \\
+tai50\_10\_1  & 3183 & 3235.55 & 3350 & 3148 & 3219.15 & 3269 & \textbf{3049} & \textbf{3093.20} & 3152 \\
+tai50\_20\_1  & 4100 & 4197.45 & 4284 & 4090 & 4173.80 & 4299 & \textbf{3926} & \textbf{3948.95} & 3978 \\ \hline
+tai100\_5\_1  & 5527 & 5559.25 & 5628 & 5512 & 5558.25 & 5626 & \textbf{5495} & \textbf{5513.70} & 5529 \\
+tai100\_10\_1 & 6004 & 6107.50 & 6230 & 5995 & 6064.30 & 6127 & \textbf{5796} & \textbf{5845.05} & 5912 \\
+tai100\_20\_1 & 6825 & 6893.70 & 7033 & 6769 & 6848.40 & 6949 & \textbf{6387} & \textbf{6450.20} & 6514 \\ \hline
+\end{tabular}
+}
+\end{table}
+
+\clearpage
+\subsection{Different Cooling Parameter for SA}
+% 不同冷卻參數的差別
+針對模擬退火法，我們測試了初始溫度 $T$ 與冷卻率 $\alpha$ 的組合。
+由表 \ref{tab:sa_para} 可見，較高的初始溫度 ($T=1000$) 配合較慢的降溫率 ($\alpha=0.95$)，
+雖然計算開銷較大，但在大型測資(如 tai100\_20\_1)中能獲得較佳的 Min 與 Avg。
+快速降溫 ($\alpha=0.8$) 雖然收斂快，但容易過早陷入區域最佳解。
+
+
+\begin{table}[H]
+\caption{SA 不同參數組合對結果之影響}
+\label{tab:sa_para}
+\centering
+
+% === 上半部表格 (alpha = 0.95) ===
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc}
+\hline
+Instance & \multicolumn{3}{c|}{$T=1000, \alpha=0.95$} & \multicolumn{3}{c}{$T=100, \alpha=0.95$} \\
+ & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai20\_5\_1   & \textbf{1297} & \textbf{1300.70} & 1339 & \textbf{1297} & 1308.15 & 1339 \\
+tai20\_10\_1  & 1616 & 1650.55 & 1703 & \textbf{1607} & \textbf{1649.05} & 1707 \\
+tai20\_20\_1  & 2346 & 2402.75 & 2433 & 2346 & \textbf{2391.00} & 2446 \\ \hline
+tai50\_5\_1   & 2740 & 2760.20 & 2790 & 2737 & \textbf{2755.70} & 2774 \\
+tai50\_10\_1  & 3165 & 3231.60 & 3303 & 3168 & 3233.90 & 3296 \\
+tai50\_20\_1  & 4114 & 4183.45 & 4236 & 4126 & 4176.30 & 4261 \\ \hline
+tai100\_5\_1  & 5507 & \textbf{5547.30} & 5573 & \textbf{5500} & 5549.30 & 5576 \\
+tai100\_10\_1 & \textbf{5981} & 6090.35 & 6166 & 5986 & 6084.15 & 6192 \\
+tai100\_20\_1 & \textbf{6732} & \textbf{6842.40} & 6976 & 6744 & 6854.20 & 6927 \\ \hline
+Instance & \multicolumn{3}{c|}{$T=1000, \alpha=0.8$} & \multicolumn{3}{c}{$T=100, \alpha=0.8$} \\
+tai20\_5\_1   & \textbf{1297} & 1303.00 & 1329 & \textbf{1297} & 1302.70 & 1339 \\
+tai20\_10\_1  & 1627 & 1659.80 & 1708 & 1618 & 1662.55 & 1749 \\
+tai20\_20\_1  & 2355 & 2399.00 & 2440 & \textbf{2344} & 2401.20 & 2466 \\ \hline
+tai50\_5\_1   & \textbf{2730} & 2758.20 & 2793 & \textbf{2730} & 2760.45 & 2774 \\
+tai50\_10\_1  & \textbf{3153} & 3223.75 & 3278 & 3165 & \textbf{3217.45} & 3286 \\
+tai50\_20\_1  & \textbf{4086} & \textbf{4161.85} & 4259 & 4111 & 4163.60 & 4250 \\ \hline
+tai100\_5\_1  & 5514 & 5550.15 & 5596 & 5522 & 5548.55 & 5626 \\
+tai100\_10\_1 & 5983 & 6076.85 & 6165 & 5990 & \textbf{6056.25} & 6146 \\
+tai100\_20\_1 & 6769 & 6869.15 & 7024 & 6778 & 6869.25 & 6942 \\ \hline
+\end{tabular}
+}
+
+\end{table}
+
+為了進一步從視覺上驗證冷卻參數的影響，圖 \ref{fig:sa_traj} 展示了大型測資 \texttt{tai100\_20\_1} 在四種不同 $T$ 與 $\alpha$ 組合下的搜尋軌跡。
+
+由圖 \ref{fig:sa_traj}(a) 與 (b) 可觀察到，當採用較慢的降溫率 ($\alpha=0.95$) 時，代表當代解的紅線在迭代前期與中期能維持較大範圍的震盪。這表明演算法在較長的時間內保有接受劣解的能力，使得歷史最佳解（藍線）有機會隨著迭代逐步且穩定地下降，展現出良好的探索（Diversification）與開發（Intensification）平衡。
+
+反觀圖 \ref{fig:sa_traj}(c) 與 (d)，當降溫率過快 ($\alpha=0.8$) 時，無論初始溫度高低，紅線的震盪幅度在不到 100 代內便迅速收斂並趨於平緩。這意味著系統溫度驟降，演算法過早失去接受劣解的機率，實質上退化為單純的 Iterative Improvement。從圖中可見，藍線在極早期就呈現水平停滯，完美印證了表格中快速降溫容易陷入區域最佳解（Premature Convergence）的結論。
+
+綜合而言，對於如 \texttt{tai100\_20\_1} 這種解空間龐大的實例，給予足夠的初始溫度 ($T=1000$) 以跨越初期的巨大屏障，並搭配緩慢的降溫排程 ($\alpha=0.95$) 來延長全域搜尋的壽命，是取得較佳且穩定解的關鍵。
+
+\begin{figure}[H]
+    \centering
+    % 第一列
+    \begin{subfigure}{0.4\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{./tex_img/diff_sa_para/SA_tai100_20_1_T1000.000000_C0.950000_6863.jpg}
+        \caption{$T=1000, \alpha=0.95$ (慢速降溫)}
+        \label{fig:sa_t1000_c095}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.4\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{./tex_img/diff_sa_para/SA_tai100_20_1_T100.000000_C0.950000_6802.jpg}
+        \caption{$T=100, \alpha=0.95$ (慢速降溫)}
+        \label{fig:sa_t100_c095}
+    \end{subfigure}
+    
+    \vspace{0.3cm} % 增加兩列之間的垂直間距
+    
+    % 第二列
+    \begin{subfigure}{0.4\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{./tex_img/diff_sa_para/SA_tai100_20_1_T1000.000000_C0.800000_6834.jpg}
+        \caption{$T=1000, \alpha=0.8$ (快速降溫)}
+        \label{fig:sa_t1000_c08}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.4\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{./tex_img/diff_sa_para/SA_tai100_20_1_T100.000000_C0.800000_6853.jpg}
+        \caption{$T=100, \alpha=0.8$ (快速降溫)}
+        \label{fig:sa_t100_c08}
+    \end{subfigure}
+    
+    \caption{tai100\_20\_1 測資在不同 SA 冷卻參數下之搜尋軌跡比較}
+    \label{fig:sa_traj}
+\end{figure}
+
+
+\subsection{Different Length of Tabu Tenure for TS}
+% 不同Tabu List長度的差別
+本實驗進一步分析禁忌長度（Tabu Tenure, $L$）對搜尋表現的影響。
+如表 \ref{tab:ts_para} 所示，較長的禁忌長度（$L=15$ 與 $L=10$）在多數測資中的整體表現（特別是平均完工時間）明顯優於較短的禁忌長度（$L=5$）。
+
+分析原因在於，當 $L=5$ 時禁忌名單過短，導致演算法容易在少數幾個區域最佳解之間發生循環（Cycling），
+缺乏足夠的多樣化（Diversification）能力來探索未知的解空間。
+反之，適當增加禁忌長度能有效強迫搜尋軌跡遠離已造訪過的結構；
+其中 $L=10$ 在部分小型測資（如 tai20 系列）能靈活找到更低的最小值（Min），
+而 $L=15$ 則在大型測資（如 tai100 系列）中展現出更強的探索能力與更穩定的平均收斂品質。
+
+
+\begin{table}[H]
+\caption{TS 不同禁忌長度對結果之影響}
+\label{tab:ts_para}
+\centering
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc|ccc}
+\hline
+Instance & \multicolumn{3}{c|}{$L=15$} & \multicolumn{3}{c|}{$L=10$} & \multicolumn{3}{c}{$L=5$} \\
+ & Min & Avg & Max & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai100\_10\_1 & 5800 & 5840.80 & 5912 & \textbf{5799} & 5849.45 & 5912 & 5828 & 5898.80 & 5939 \\ 
+tai100\_20\_1 & \textbf{6386} & 6439.70 & 6514 & 6413 & 6453.15 & 6501 & 6415 & 6490.85 & 6582 \\ 
+tai100\_5\_1 & \textbf{5495} & 5517.30 & 5546 & \textbf{5495} & 5517.75 & 5564 & \textbf{5495} & 5520.40 & 5546 \\ \hline
+tai20\_10\_1 & 1583 & 1589.00 & 1595 & \textbf{1582} & 1589.50 & 1599 & 1583 & 1603.30 & 1653 \\ 
+tai20\_20\_1 & 2303 & 2324.40 & 2357 & \textbf{2302} & 2313.15 & 2346 & \textbf{2302} & 2345.05 & 2392 \\ 
+tai20\_5\_1 & 1283 & 1296.95 & 1305 & \textbf{1278} & 1305.25 & 1339 & \textbf{1278} & 1309.30 & 1339 \\ \hline
+tai50\_10\_1 & \textbf{3046} & 3082.00 & 3135 & 3048 & 3083.05 & 3131 & \textbf{3046} & 3113.35 & 3160 \\ 
+tai50\_20\_1 & \textbf{3920} & 3942.35 & 4045 & 3921 & 3949.10 & 4010 & 3934 & 3988.75 & 4055 \\ 
+tai50\_5\_1 & \textbf{2724} & 2743.80 & 2758 & \textbf{2724} & 2745.70 & 2774 & \textbf{2724} & 2744.85 & 2774 \\ 
+\hline
+\end{tabular}
+}
+\end{table}
+
+為了進一步從視覺上驗證上述推論，我們繪製了 \texttt{tai20\_20\_1} 測資在不同禁忌長度下的搜尋軌跡。
+
+如圖 \ref{fig:ts_traj} (a) 所示，當 $L=5$ 時，當代解的完工時間（紅線）在迭代過程中呈現小幅度的密集震盪，且歷史最佳解（藍線）在搜尋前期便陷入停滯（Makespan = 2313），顯示演算法在局部盆地內發生了嚴重的循環（Cycling）現象而無法逃脫。
+
+相對地，如圖 \ref{fig:ts_traj} (b) 所示，當 $L=10$ 時，當代解的軌跡展現出更頻繁且更大幅度的爬升。這直觀地證明了較長的禁忌名單有效地封鎖了短期內的回溯路徑，強迫演算法接受暫時較差的解以跳脫區域最佳解（Local Optima）。藉由這種強制多樣化（Diversification）的機制，演算法成功在搜尋中後期發掘出更優的歷史最佳解（Makespan = 2306）。
+
+\begin{figure}[H]
+    \centering
+    % 請確保您的 LaTeX 導言區有引入 \usepackage{graphicx} 與 \usepackage{subcaption}
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{tex_img/diff_tabu_len/TS_tai20_20_1TS_L5_2313.jpg}
+        \caption{$L=5$ 搜尋軌跡}
+        \label{fig:traj_L5}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{tex_img/diff_tabu_len/TS_tai20_20_1TS_L10_2306.jpg}
+        \caption{$L=10$ 搜尋軌跡}
+        \label{fig:traj_L10}
+    \end{subfigure}
+    \caption{tai20\_20\_1 測資在不同禁忌長度下之搜尋軌跡比較}
+    \label{fig:ts_traj}
+\end{figure}
+
+\clearpage
+\subsection{Different Tabu Memory Mechanisms in TS}
+% 不同Tabu List記憶內容的差別
+最後比較動作禁忌 (Action-based) 與 排列狀態禁忌 (Permutation Hash-based)。
+如表 \ref{tab:ts_logic} 所示，\textbf{動作禁忌} 在多數情況下的平均完工時間均優於排列狀態禁忌。
+分析原因在於，排列狀態禁忌僅能防止回到「完全相同」的解，對於鄰域中極其相似的解空間缺乏約束力，
+而動作禁忌則能強制搜尋跳脫目前的結構區域。
+\begin{table}[H]
+\caption{Action-based 與 Hash-based 之效能比較}
+\label{tab:ts_logic}
+\centering
+\addtolength{\tabcolsep}{-3pt} % 稍微縮減欄間距以適應雙欄版面
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc}
+\hline
+\textbf{Instance} & \multicolumn{3}{c|}{\textbf{TS (Action-based)}} & \multicolumn{3}{c}{\textbf{TS2 (Hash-based)}} \\
+ & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai20\_5\_1   & \textbf{1278} & \textbf{1306.00} & 1339 & 1297 & 1326.15 & 1377 \\
+tai20\_10\_1  & \textbf{1582} & \textbf{1586.90} & 1596 & 1586 & 1622.85 & 1671 \\
+tai20\_20\_1  & \textbf{2298} & \textbf{2318.65} & 2353 & 2309 & 2361.65 & 2435 \\ \hline
+tai50\_5\_1   & \textbf{2724} & \textbf{2725.25} & 2735 & 2724 & 2730.05 & 2761 \\
+tai50\_10\_1  & \textbf{3053} & \textbf{3093.15} & 3151 & 3081 & 3129.70 & 3167 \\
+tai50\_20\_1  & \textbf{3916} & \textbf{3941.40} & 3971 & 3943 & 4038.50 & 4124 \\ \hline
+tai100\_5\_1  & \textbf{5495} & \textbf{5512.10} & 5564 & 5495 & 5518.45 & 5564 \\
+tai100\_10\_1 & \textbf{5785} & \textbf{5831.70} & 5912 & 5800 & 5895.85 & 5969 \\
+tai100\_20\_1 & \textbf{6394} & \textbf{6449.60} & 6528 & 6453 & 6540.45 & 6614 \\ \hline
+\end{tabular}
+}
+\end{table}
+
+為了進一步分析此效能差異，圖 \ref{fig:ts_traj_tai20_10_1} 提供了 \texttt{tai20\_10\_1} 測資在兩種禁忌紀錄方式下的搜尋軌跡比較。
+
+如圖 \ref{fig:ts_traj_tai20_10_1}(a) 所示，\textbf{動作禁忌} (Action-based, TS) 的搜尋軌跡呈現有序的優化過程。
+紅線（當代解）在探索過程中雖有震盪，但能有效在 promising 區域深入挖掘，藍線（歷史最佳解）呈現明顯的階梯式下降，最終收斂至較佳的解 (1583)。
+
+相較之下，圖 \ref{fig:ts_traj_tai20_10_1}(b) 的 \textbf{排列狀態禁忌} (Permutation Hash-based, TS2) 軌跡則十分雜亂且低效。
+紅線（當代解）頻繁出現極大幅度的向上跳躍（Makespan 飆升至 1800 以上），且藍線（歷史最佳解）在迭代非常早期（約 30 代）後即陷入長期的停滯 (1593)。這直觀地印證了前述分析：TS2 僅能防止回到「完全相同」的排列配置，但對於結構極其相似的鄰域缺乏約束力。演算法在禁止了目前優解後，由於鄰域內其他相似排列未被禁忌且Makespan亦佳，導致演算法被「困」在同一個局部盆地（Basin）中反覆跳躍，藍線因此無法有效下降，尋優能力顯著遜於動作禁忌。
+
+\begin{figure}[H]
+    \centering
+    % 請確保您的 LaTeX 導言區有引入 \usepackage{graphicx} 與 \usepackage{subcaption}
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{./tex_img/diff_tabu_obj/TS_tai20_10_1_1583.jpg}
+        \caption{TS (Action-based, 結果: 1583)}
+        \label{fig:traj_ts1}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{./tex_img/diff_tabu_obj/TS2_tai20_10_1_1593.jpg}
+        \caption{TS2 (Hash-based, 結果: 1593)}
+        \label{fig:traj_ts2}
+    \end{subfigure}
+    \caption{tai20\_10\_1 測資在不同禁忌記憶機制之搜尋軌跡比較}
+    \label{fig:ts_traj_tai20_10_1}
+\end{figure}
+
+\section{Conclusion}
+本研究成功實作並比較了 II、SA 與 TS 三種啟發式演算法於定序流線型工廠排程問題之表現。
+透過大量的實驗數據分析，得出以下主要結論：
+首先，在演算法對比中，TS 憑藉其獨特的記憶機制，在大型測資（如 tai100 系列）中顯著優於受限於貪婪策略的 II 以及需精細調參的 SA。
+其次，在 SA 參數研究中，證實了較慢的降溫率雖增加計算代價，但能有效提升解的品質。
+最重要的發現在於禁忌搜尋記憶內容的影響。實驗證明，相較於記錄完整解狀態的「排列狀態禁忌」，
+「動作禁忌」具備更強的搜尋多樣化 (Diversification) 能力。由於排列狀態禁忌僅能精確避開曾出現過的單點解，
+容易在相似結構的鄰域間產生震盪；而動作禁忌透過封鎖特定的交換路徑，能有效強制演算法探索全新的解空間。
+未來的研究方向可考慮結合 SA 的接受機率與 TS 的禁忌名單，
+開發混合型啟發式演算法 (Hybrid Metaheuristics)，
+或引入動態禁忌長度調整機制，以進一步提升在極大規模工業排程問題上的運算效率。
+
+% \begin{thebibliography}{00}
+% \bibitem{b7} M. Young, The Technical Writer's Handbook. Mill Valley, CA: University Science, 1989.
+% \end{thebibliography}
+
+\end{document}

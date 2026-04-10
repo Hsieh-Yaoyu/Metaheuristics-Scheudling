@@ -423,12 +423,6 @@ public:
     // ==========================================
     // 基因演算法 (Genetic Algorithm) 主程式
     // ==========================================
-// ==========================================
-    // 基因演算法 (Genetic Algorithm) 主程式
-    // ==========================================
-// ==========================================
-    // 基因演算法 (Genetic Algorithm) 主程式
-    // ==========================================
     std::vector<int> genetic_algorithm(int pop_size = 50, int max_gen = 1000, double crossover_rate = 0.8, double mutation_rate = 0.1, CrossoverType crossover_type = OX, bool with_tabu = false,
         std::string instance_name = "Instance", std::string save_dir = "./img"){
 
@@ -451,7 +445,7 @@ public:
 
         // Tabu Hash 相關設定 (僅在 with_tabu == true 時發揮作用)
         std::unordered_map<uint64_t, int> tabu_list;
-        int tabu_tenure = 10;
+        int tabu_tenure = 5;
 
         auto compute_hash = [](const std::vector<int> &arr) -> uint64_t{
             uint64_t hash_val = 0;
@@ -665,7 +659,7 @@ void calculate_and_write_stats(std::ofstream &csv, const std::string &name, cons
 
 int main(){
 
-    #define TABU_TEST true
+    #define TABU_TEST false
     // MetaheuristicSolver solver(*(new Scheduling()), 10);
     // solver.cross_test();
 
@@ -677,7 +671,8 @@ int main(){
     }
 
     std::ofstream csv_file("results.csv");
-    csv_file << "Instance,GA_OX_Min,GA_OX_Avg,GA_OX_Max,GA_LOX_Min,GA_LOX_Avg,GA_LOX_Max,GA_PMX_Min,GA_PMX_Avg,GA_PMX_Max,GA_CX_Min,GA_CX_Avg,GA_CX_Max\n";
+    csv_file << "Instance,GA_OX_Min,GA_OX_Avg,GA_OX_Max,GA_OX_tabu_Min,GA_OX_tabu_Avg,GA_OX_tabu_Max\n";
+    // csv_file << "Instance,GA_OX_Min,GA_OX_Avg,GA_OX_Max,GA_LOX_Min,GA_LOX_Avg,GA_LOX_Max,GA_PMX_Min,GA_PMX_Avg,GA_PMX_Max,GA_CX_Min,GA_CX_Avg,GA_CX_Max\n";
 
     int NUM_RUNS = 20;
 
@@ -694,6 +689,7 @@ int main(){
             scheduler.job_mtx = tc.job_mtx;
 
             std::vector<int> ox_results(NUM_RUNS);
+            std::vector<int> ox_results2(NUM_RUNS);
             std::vector<int> lox_results(NUM_RUNS);
             std::vector<int> pmx_results(NUM_RUNS);
             std::vector<int> cx_results(NUM_RUNS);
@@ -708,17 +704,21 @@ int main(){
                 std::string save_dir = "./img/Test_" + std::to_string(run);
 
                 MetaheuristicSolver solver(scheduler, tc.num_jobs);
-                std::vector<int> ox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::OX, TABU_TEST, tc.instance_name + "_GA_OX", save_dir);
+                std::vector<int> ox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::OX, true, tc.instance_name + "_GA_OX_tabu", save_dir);
                 ox_results[run - 1] = scheduler.run_scheduling(ox_res);
 
-                std::vector<int> lox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::LOX, TABU_TEST, tc.instance_name + "_GA_LOX", save_dir);
-                lox_results[run - 1] = scheduler.run_scheduling(lox_res);
+                std::vector<int> ox_res2 = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::OX, false, tc.instance_name + "_GA_OX", save_dir);
+                ox_results2[run - 1] = scheduler.run_scheduling(ox_res2);
 
-                std::vector<int> pmx_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::PMX, TABU_TEST, tc.instance_name + "_GA_PMX", save_dir);
-                pmx_results[run - 1] = scheduler.run_scheduling(pmx_res);
 
-                std::vector<int> cx_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::CX, TABU_TEST, tc.instance_name + "_GA_CX", save_dir);
-                cx_results[run - 1] = scheduler.run_scheduling(cx_res);
+                // std::vector<int> lox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::LOX, TABU_TEST, tc.instance_name + "_GA_LOX", save_dir);
+                // lox_results[run - 1] = scheduler.run_scheduling(lox_res);
+
+                // std::vector<int> pmx_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::PMX, TABU_TEST, tc.instance_name + "_GA_PMX", save_dir);
+                // pmx_results[run - 1] = scheduler.run_scheduling(pmx_res);
+
+                // std::vector<int> cx_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::CX, TABU_TEST, tc.instance_name + "_GA_CX", save_dir);
+                // cx_results[run - 1] = scheduler.run_scheduling(cx_res);
 
 #pragma omp critical
                 {
@@ -727,10 +727,11 @@ int main(){
             }
 
             csv_file << tc.instance_name << ",";
-            calculate_and_write_stats(csv_file, "GA_OX", ox_results);
-            calculate_and_write_stats(csv_file, "GA_LOX", lox_results);
-            calculate_and_write_stats(csv_file, "GA_PMX", pmx_results);
-            calculate_and_write_stats(csv_file, "GA_CX", cx_results);
+            calculate_and_write_stats(csv_file, "GA_OX_tabu_", ox_results);
+            calculate_and_write_stats(csv_file, "GA_OX", ox_results2);
+            // calculate_and_write_stats(csv_file, "GA_LOX", lox_results);
+            // calculate_and_write_stats(csv_file, "GA_PMX", pmx_results);
+            // calculate_and_write_stats(csv_file, "GA_CX", cx_results);
             csv_file << "\n";
 
             std::cout << ">> " << tc.instance_name << " 統計資料已寫入 results.csv\n";
