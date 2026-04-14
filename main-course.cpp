@@ -384,6 +384,7 @@ private:
 
 
     // --- 新增：突變算子 (Swap Mutation) ---
+// --- 優化 1：插入突變 (Insertion Mutation) ---
     void mutate(Individual &ind, double mutation_rate){
         std::uniform_real_distribution<double> prob(0.0, 1.0);
         if(prob(rng) < mutation_rate){
@@ -391,8 +392,43 @@ private:
             int idx1 = dist(rng);
             int idx2 = dist(rng);
             while(idx1 == idx2) idx2 = dist(rng);
-            std::swap(ind.chromosome[idx1], ind.chromosome[idx2]);
+
+            // 抽出 idx1 的工作，並插入到 idx2 的位置
+            int job = ind.chromosome[idx1];
+            ind.chromosome.erase(ind.chromosome.begin() + idx1);
+            ind.chromosome.insert(ind.chromosome.begin() + idx2, job);
         }
+    }
+
+    // --- 優化 2：快速區域搜尋 (Fast Local Search for Memetic Algorithm) ---
+    void local_search(Individual &ind, int max_steps = 30){
+        std::vector<int> best_chrom = ind.chromosome;
+        int best_makespan = ind.makespan;
+
+        std::uniform_int_distribution<int> dist(0, num_jobs - 1);
+
+        for(int step = 0; step < max_steps; ++step){
+            int idx1 = dist(rng);
+            int idx2 = dist(rng);
+            if(idx1 == idx2) continue;
+
+            // 測試一個插入鄰居
+            std::vector<int> neighbor = best_chrom;
+            int job = neighbor[idx1];
+            neighbor.erase(neighbor.begin() + idx1);
+            neighbor.insert(neighbor.begin() + idx2, job);
+
+            int neighbor_makespan = evaluator.run_scheduling(neighbor);
+
+            // 若找到更好的，立刻接受並更新 (First Improvement)
+            if(neighbor_makespan < best_makespan){
+                best_chrom = neighbor;
+                best_makespan = neighbor_makespan;
+            }
+        }
+
+        ind.chromosome = best_chrom;
+        ind.makespan = best_makespan;
     }
 
     void save_plot(const std::string &save_dir, const std::string &algo_prefix, const std::string &instance_name, int best_makespan){
@@ -456,6 +492,8 @@ private:
         }
     }
 
+
+
 public:
     MetaheuristicSolver(Scheduling &sched, int jobs) : evaluator(sched), num_jobs(jobs){
         std::random_device rd;
@@ -467,7 +505,7 @@ public:
     // ==========================================
     // 基因演算法 (Genetic Algorithm) 主程式
     // ==========================================
-    std::vector<int> genetic_algorithm(int pop_size = 50, int max_gen = 1000, double crossover_rate = 0.8, double mutation_rate = 0.1,
+    std::vector<int> genetic_algorithm(int pop_size = 50, int max_gen = 1000, double crossover_rate = 0.8, double mutation_rate = 0.1, double local_search_rate = 0.2,
         CrossoverType crossover_type = OX, bool with_tabu = false, bool dynamic_tabu = false, bool do_neh = false,
         std::string instance_name = "Instance", std::string save_dir = "./img"){
 
@@ -527,8 +565,8 @@ public:
                 tabu_list[best_hash] = gen + tabu_tenure;
             }
 
-            if(dynamic_tabu && gen % 50 == 0){
-                tabu_tenure = 10 - (gen / 50); // 隨著世代增加，逐步加長禁忌期限
+            if(dynamic_tabu && gen % 100 == 0){
+                tabu_tenure = 10 - (gen / 100); // 隨著世代增加，逐步加長禁忌期限
                 if(tabu_tenure == 0){
                     std::cout << "Tabu tenure has reached 0, disabling tabu mechanism.\n";
                     with_tabu = false;
@@ -583,11 +621,11 @@ public:
                     // ====================================================
                     // 路徑 B：加上 Tabu 與同代重複排除機制的 GA
                     // ====================================================
-                    bool off1_valid = false;
-                    bool off2_valid = false;
+                    bool v1 = false;
+                    bool v2 = false;
                     int retries = 0;
 
-                    while(retries < 10 && (!off1_valid || !off2_valid)){
+                    while(retries < 10 && (!v1 || !v2)){
                         Individual temp1 = p1, temp2 = p2;
 
                         // 交配 (Crossover)
@@ -614,38 +652,36 @@ public:
                         mutate(temp1, mutation_rate);
                         mutate(temp2, mutation_rate);
 
+
+
                         uint64_t h1 = compute_hash(temp1.chromosome);
                         uint64_t h2 = compute_hash(temp2.chromosome);
 
-                        if(!off1_valid){
-                            bool is_tabu = ((tabu_list.count(h1) && tabu_list[h1] > gen) || current_pop_hashes.count(h1));
-                            if(!is_tabu){
+                        if(!v1){
+                            if(!current_pop_hashes.count(h1) && (!tabu_list.count(h1) || tabu_list[h1] <= gen)){
                                 temp1.makespan = evaluator.run_scheduling(temp1.chromosome);
-                                off1 = temp1;
-                                off1_valid = true;
+                                if(prob(rng) < local_search_rate) local_search(temp1);
+                                off1 = temp1; v1 = true;
                                 current_pop_hashes.insert(h1);
                                 tabu_list[h1] = gen + tabu_tenure;
                             }
                         }
-
-                        if(!off2_valid && (next_generation.size() + (off1_valid ? 1 : 0) < pop_size)){
-                            bool is_tabu = ((tabu_list.count(h2) && tabu_list[h2] > gen) || current_pop_hashes.count(h2));
-                            if(!is_tabu){
+                        if(!v2 && (next_generation.size() + (v1 ? 1 : 0) < pop_size)){
+                            if(!current_pop_hashes.count(h2) && (!tabu_list.count(h2) || tabu_list[h2] <= gen)){
                                 temp2.makespan = evaluator.run_scheduling(temp2.chromosome);
-                                off2 = temp2;
-                                off2_valid = true;
+                                if(prob(rng) < local_search_rate) local_search(temp2);
+                                off2 = temp2; v2 = true;
                                 current_pop_hashes.insert(h2);
                                 tabu_list[h2] = gen + tabu_tenure;
                             }
                         }
-                        else if(next_generation.size() + (off1_valid ? 1 : 0) >= pop_size){
-                            off2_valid = true;
-                        }
-
+                        else if(next_generation.size() + (v1 ? 1 : 0) >= pop_size) v2 = true;
                         retries++;
                     }
 
-                    if(!off1_valid){
+
+
+                    if(!v1){
                         off1 = generate_random_individual();
                         uint64_t h1 = compute_hash(off1.chromosome);
                         current_pop_hashes.insert(h1);
@@ -654,7 +690,7 @@ public:
                     next_generation.push_back(off1);
 
                     if(next_generation.size() < pop_size){
-                        if(!off2_valid){
+                        if(!v2){
                             off2 = generate_random_individual();
                             uint64_t h2 = compute_hash(off2.chromosome);
                             current_pop_hashes.insert(h2);
@@ -721,7 +757,7 @@ void calculate_and_write_stats(std::ofstream &csv, const std::string &name, cons
 
 int main(){
 
-    #define TABU_TEST false
+#define TABU_TEST false
     // MetaheuristicSolver solver(*(new Scheduling()), 10);
     // solver.cross_test();
 
@@ -733,10 +769,10 @@ int main(){
     }
 
     std::ofstream csv_file("results.csv");
-    csv_file << "Instance,GA_OX_tabu_Min,GA_OX_tabu_Avg,GA_OX_tabu_Max,GA_OX_Min_tabu_dynamic,GA_OX_Avg_dynamic,GA_OX_Max_dynamic,\n";
+    csv_file << "Instance,GA_OX_Min,GA_OX_Avg,GA_OX_Max,GA_OX_tabu_Min,GA_OX_tabu_Avg,GA_OX_tabu_Max\n";
     // csv_file << "Instance,GA_OX_Min,GA_OX_Avg,GA_OX_Max,GA_LOX_Min,GA_LOX_Avg,GA_LOX_Max,GA_PMX_Min,GA_PMX_Avg,GA_PMX_Max,GA_CX_Min,GA_CX_Avg,GA_CX_Max\n";
 
-    int NUM_RUNS = 20;
+    int NUM_RUNS = 30;
 
     for(const auto &entry : fs::directory_iterator(test_case_dir)){
         if(entry.path().extension() == ".txt"){
@@ -762,19 +798,23 @@ int main(){
             }
 
 #pragma omp parallel for schedule(dynamic)
+            std::vector<int> best_seq;
+            int best_makespan = 1e9;
             for(int run = 1; run <= NUM_RUNS; ++run){
                 std::string save_dir = "./img/Test_" + std::to_string(run);
 
                 MetaheuristicSolver solver(scheduler, tc.num_jobs);
-                std::vector<int> ox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1,
+                std::vector<int> ox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.5, 0.1, 
                     MetaheuristicSolver::OX, true, false, false,
                     tc.instance_name + "_GA_OX_tabu", save_dir);
-                ox_results[run - 1] = scheduler.run_scheduling(ox_res);
+                int makespan = scheduler.run_scheduling(ox_res);
+                ox_results[run - 1] = makespan;
+                if(makespan < best_makespan){
+                    best_makespan = makespan;
+                    best_seq = ox_res;
+                }
 
-                std::vector<int> ox_res2 = solver.genetic_algorithm(50, 1000, 0.8, 0.1,
-                    MetaheuristicSolver::OX, true, true, false,
-                    tc.instance_name + "_GA_OX_tabu_dynamic", save_dir);
-                ox_results2[run - 1] = scheduler.run_scheduling(ox_res2);
+
 
                 // std::vector<int> lox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::LOX, TABU_TEST, tc.instance_name + "_GA_LOX", save_dir);
                 // lox_results[run - 1] = scheduler.run_scheduling(lox_res);
@@ -793,13 +833,19 @@ int main(){
 
             csv_file << tc.instance_name << ",";
             calculate_and_write_stats(csv_file, "GA_OX_tabu_", ox_results);
-            calculate_and_write_stats(csv_file, "GA_OX_tabu_dynamic", ox_results2);
             // calculate_and_write_stats(csv_file, "GA_LOX", lox_results);
             // calculate_and_write_stats(csv_file, "GA_PMX", pmx_results);
             // calculate_and_write_stats(csv_file, "GA_CX", cx_results);
             csv_file << "\n";
 
             std::cout << ">> " << tc.instance_name << " 統計資料已寫入 results.csv\n";
+
+            std::ofstream best_seq_file("best_sequence_" + tc.instance_name + ".txt");
+            for(int i = 0; i < best_seq.size(); i++){
+                best_seq_file << best_seq[i] << " ";
+            }
+            best_seq_file << "\n";
+            best_seq_file.close();
         }
     }
 

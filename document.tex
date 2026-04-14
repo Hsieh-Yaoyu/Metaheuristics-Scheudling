@@ -104,7 +104,7 @@ Taipei, Taiwan(R.O.C) \\
     \item \textbf{鄰域函式 (Neighborhood Function)}：採用交換移動 (Swap)。定義鄰域運算為隨機選取序列中兩個位置並交換其內容，以產生新的可行解。
 \end{itemize}
 
-\section{Genetic Algorithm}
+\subsection{Genetic Algorithm}
 
 
 
@@ -216,6 +216,54 @@ $$ \max(current\_job\_ready\_time, machine\_end\_time[m_i])$$
 
 本研究針對 Taillard 測試案例進行實驗，每個案例重複執行 20 次以確保統計穩定性。
 \subsection{Different Crossover Operators}
+% 比較四種不同交配算子 (OX, LOX, PMX, CX) 的效能
+
+為了評估不同交配算子在排列流水線排程問題（PFSP）上的搜尋能力，本實驗在相同的世代數與交配/突變機率下，分別測試了順序交配（OX）、線性順序交配（LOX）、部分映射交配（PMX）與循環交配（CX）。實驗結果如表 \ref{tab:crossover_comp} 所示。
+\begin{table}[htbp]
+\caption{不同交配算子之效能比較 (OX, LOX, PMX, CX)}
+\label{tab:crossover_comp}
+\centering
+
+% 第一段：OX 與 LOX
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{l|ccc|ccc}
+\hline
+\textbf{Instance} & \multicolumn{3}{c|}{\textbf{OX}} & \multicolumn{3}{c}{\textbf{LOX}} \\
+ & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai20\_5\_1   & \textbf{1278} & 1297.85 & 1323 & 1294 & \textbf{1296.85} & 1297 \\
+tai20\_10\_1  & 1618 & 1648.25 & 1707 & 1607 & \textbf{1635.10} & 1672 \\
+tai20\_20\_1  & \textbf{2333} & 2405.50 & 2489 & 2337 & \textbf{2380.40} & 2428 \\ \hline
+tai50\_5\_1   & \textbf{2729} & \textbf{2740.75} & 2757 & \textbf{2729} & 2747.55 & 2774 \\
+tai50\_10\_1  & \textbf{3088} & 3190.25 & 3263 & 3137 & \textbf{3177.25} & 3232 \\
+tai50\_20\_1  & 4031 & 4099.55 & 4193 & \textbf{4016} & 4090.90 & 4152 \\ \hline
+tai100\_5\_1  & \textbf{5493} & \textbf{5512.70} & 5536 & 5495 & 5517.95 & 5564 \\
+tai100\_10\_1 & 5901 & \textbf{5983.25} & 6102 & \textbf{5890} & 5985.15 & 6063 \\
+tai100\_20\_1 & \textbf{6584} & 6690.65 & 6798 & 6640 & 6718.25 & 6809 \\ \hline
+\textbf{Instance} & \multicolumn{3}{c|}{\textbf{PMX}} & \multicolumn{3}{c}{\textbf{CX}} \\
+ & Min & Avg & Max & Min & Avg & Max \\ \hline
+tai20\_5\_1   & 1294 & \textbf{1296.85} & 1297 & 1284 & 1300.95 & 1339 \\
+tai20\_10\_1  & 1617 & 1647.75 & 1684 & \textbf{1600} & 1636.70 & 1675 \\
+tai20\_20\_1  & 2353 & 2388.55 & 2434 & 2347 & 2390.15 & 2450 \\ \hline
+tai50\_5\_1   & \textbf{2729} & 2746.55 & 2774 & \textbf{2729} & 2744.20 & 2774 \\
+tai50\_10\_1  & 3132 & 3182.20 & 3245 & 3135 & 3179.90 & 3225 \\
+tai50\_20\_1  & 4025 & \textbf{4085.45} & 4153 & 4028 & 4088.60 & 4143 \\ \hline
+tai100\_5\_1  & 5495 & 5527.70 & 5565 & 5495 & 5526.20 & 5564 \\
+tai100\_10\_1 & 5923 & 6002.15 & 6155 & 5917 & 6030.45 & 6171 \\
+tai100\_20\_1 & 6626 & 6695.75 & 6778 & 6620 & \textbf{6689.95} & 6779 \\ \hline
+\end{tabular}
+}
+\end{table}
+
+\textbf{整體效能分析：} \\
+從表 \ref{tab:crossover_comp} 中可以觀察到，四種交配算子在不同的測資規模下各有千秋。LOX 與 PMX 在平均表現（Avg）上相對穩定，尤其在中小型測資（如 \texttt{tai20\_10\_1} 與 \texttt{tai50\_20\_1}）中，其尋優能力與收斂穩定性多半優於其他算子。這歸功於它們能夠妥善保留父代的絕對位置與線性片段特徵，有效將優良的子結構傳遞給下一代。
+
+\textbf{OX 算子之弱點與後續優化動機：} \\
+值得注意的是，儘管順序交配（Order Crossover, OX）在部分測資中幸運地命中了極佳的最小值（Min），但其\textbf{平均完工時間（Avg）與最大值（Max）在多數情況下（如 \texttt{tai20\_20\_1}, \texttt{tai50\_10\_1}, \texttt{tai50\_20\_1} 等）卻是四者之中表現最差、最不穩定的。}
+
+分析其原因，在於 OX 的「繞回（Wrap-around）」填補機制容易大幅破壞原有的絕對位置特徵，導致演化過程中的解結構過於動盪，使得族群在演化後期難以穩定收斂，進而拉高了平均的 Makespan。
+
+\textbf{基於上述觀察，我們將 OX 視為演算法強化的首要標的。} 既然 OX 具有極強的破壞性與多樣化能力（導致其極不穩定），我們推測若能引入外部的約束機制來導引其搜尋方向，或許能化劣勢為優勢。因此，在後續的實驗中，我們特別針對 OX 算子引入了\textbf{禁忌機制（Tabu Mechanism）}，期望透過嚴格過濾重複基因，將 OX 強大的震盪能量轉化為脫離區域最佳解的推力，藉此大幅提升其整體效能。
+
 
 \clearpage
 \subsection{Different mutation rates for GA}
@@ -226,7 +274,7 @@ $$ \max(current\_job\_ready\_time, machine\_end\_time[m_i])$$
 \subsection{With or without Tabu Mechanism in GA}
 % 比較有無 Tabu 機制的 GA (OX) 效能差異
 
-為了驗證將禁忌機制（Tabu Mechanism）融入基因演算法的效益，我們以順序交配（OX）為基礎，分別測試了「純粹 GA」與「結合 Tabu 防重複機制之 GA」的表現。實驗數據如表 \ref{tab:ga_tabu_comp} 所示。
+在基因演算法中，族群的早熟收斂（Premature Convergence）一直是個棘手的問題。為了解決此問題，我們最初的假設是：若將禁忌機制（Tabu Mechanism）與同代重複基因排除機制引入 GA，強迫族群維持高度的遺傳多樣性，理應能獲得更佳的全局搜尋結果。為了驗證此假設，我們以順序交配（OX）為基礎，對比了「原始 GA」與「結合 Tabu 機制之 GA」的效能。實驗數據如表 \ref{tab:ga_tabu_comp} 所示。
 
 \begin{table}[htbp]
 \caption{GA (OX) 與 GA (OX) 加上 Tabu 機制之結果比較}
@@ -237,29 +285,31 @@ $$ \max(current\_job\_ready\_time, machine\_end\_time[m_i])$$
 \hline
 \textbf{Instance} & \multicolumn{3}{c|}{\textbf{GA (OX)}} & \multicolumn{3}{c}{\textbf{GA (OX) with Tabu}} \\
  & Min & Avg & Max & Min & Avg & Max \\ \hline
-tai20\_5\_1   & 1297 & \textbf{1297.40} & 1305 & \textbf{1278} & 1298.15 & 1323 \\
-tai20\_10\_1  & 1621 & \textbf{1641.10} & 1686 & \textbf{1605} & 1645.45 & 1677 \\
-tai20\_20\_1  & \textbf{2321} & \textbf{2361.50} & 2400 & 2344 & 2390.85 & 2433 \\ \hline
-tai50\_5\_1   & 2735 & 2748.60 & 2774 & \textbf{2724} & \textbf{2738.75} & 2752 \\
-tai50\_10\_1  & 3190 & 3223.85 & 3288 & \textbf{3122} & \textbf{3171.75} & 3245 \\
-tai50\_20\_1  & 4110 & 4182.50 & 4237 & \textbf{4026} & \textbf{4095.55} & 4212 \\ \hline
-tai100\_5\_1  & 5505 & 5541.95 & 5564 & \textbf{5493} & \textbf{5508.55} & 5529 \\
-tai100\_10\_1 & 6025 & 6108.55 & 6265 & \textbf{5907} & \textbf{5982.30} & 6050 \\
-tai100\_20\_1 & 6770 & 6886.30 & 6978 & \textbf{6597} & \textbf{6706.75} & 6792 \\ \hline
+tai20\_5\_1 & \textbf{1278} & 1298.15 & 1323 & 1297 & \textbf{1297.40} & \textbf{1305} \\
+tai20\_10\_1 & \textbf{1605} & 1645.45 & \textbf{1677} & 1621 & \textbf{1641.10} & 1686 \\
+tai20\_20\_1 & 2344 & 2390.85 & 2433 & \textbf{2321} & \textbf{2361.50} & \textbf{2400} \\ \hline
+tai50\_5\_1 & \textbf{2724} & \textbf{2738.75} & \textbf{2752} & 2735 & 2748.60 & 2774 \\
+tai50\_10\_1 & \textbf{3122} & \textbf{3171.75} & \textbf{3245} & 3190 & 3223.85 & 3288 \\
+tai50\_20\_1 & \textbf{4026} & \textbf{4095.55} & \textbf{4212} & 4110 & 4182.50 & 4237 \\ \hline
+tai100\_5\_1 & \textbf{5493} & \textbf{5508.55} & \textbf{5529} & 5505 & 5541.95 & 5564 \\
+tai100\_10\_1 & \textbf{5907} & \textbf{5982.30} & \textbf{6050} & 6025 & 6108.55 & 6265 \\
+tai100\_20\_1 & \textbf{6597} & \textbf{6706.75} & \textbf{6792} & 6770 & 6886.30 & 6978 \\
+\hline
 \end{tabular}
 }
 \end{table}
 
-\textbf{整體效益分析：大問題中的多樣性優勢} \\
-觀察 \texttt{tai50} 與 \texttt{tai100} 系列的結果，可以明確看出 Tabu 機制帶來了壓倒性的優勢。無論是最佳解（Min）還是平均解（Avg），加入 Tabu 的 GA 皆顯著優於原始 GA。這印證了先前的理論：在解空間極度龐大的情況下，傳統 GA 容易發生近親繁殖與早熟收斂；而 Tabu 機制透過 Hash 比對強制剔除重複個體，成功迫使演算法持續探索未知的解空間，帶來了極佳的全域搜尋能力。
+\textbf{出乎意料的實驗結果：} \\
+從表 \ref{tab:ga_tabu_comp} 可以觀察到一個與預期完全相反的現象。除了在 \texttt{tai20\_20\_1} 等少數小型測資中，Tabu 機制略微提升了搜尋品質外，在所有中大型測資（\texttt{tai50} 與 \texttt{tai100} 系列）中，\textbf{加入 Tabu 機制的 GA 表現全面劣於原始 GA}，其平均完工時間（Avg）甚至出現了顯著的退化。
 
-\textbf{反常現象探討：小問題中的過度強制多樣化} \\
-然而，在小規模測資（\texttt{tai20} 系列）中，我們觀察到了截然不同的現象。特別是在 \texttt{tai20\_20\_1} 中，加入 Tabu 機制後的最差、平均乃至最佳解，反而全面劣於原始 GA。此外，在 \texttt{tai20\_5\_1} 與 \texttt{tai20\_10\_1} 中，Tabu 雖然幸運地探索到了更低的最佳解（Min），但其平均表現（Avg）卻變得較差且不穩定。
+\textbf{反常現象之學術探討 (Over-diversification vs. Exploitation)：} \\
+深入分析演算法的行為軌跡，我們認為此現象起因於「過度多樣化（Over-diversification）」摧毀了 GA 的「局部開發（Exploitation/Intensification）」能力。
 
-分析此反常現象的原因，在於\textbf{解空間規模與開發（Intensification）需求的權衡}。對於只有 20 個工作的排程問題，其優良解所在的「盆地（Basin of attraction）」相對狹窄且集中。原始 GA 能夠快速在該區域進行密集的交配與局部最佳化；反觀 Tabu 機制因為嚴格禁止生成曾出現的解，當族群逼近區域最佳解時，演算法會因為頻繁踩到「禁忌」而被迫進行「隨機移民（Random Immigration）」。這種\textbf{強制的過度多樣化（Over-diversification）}，反而硬生生地將演算法從快要收斂的優良區域中「踢走」，導致它浪費運算資源去探索劣質解，進而拖垮了整體的平均完工時間。
+在原始的 GA 中，當搜尋進入中後期，族群會自然地收斂到幾個優良的解附近（盆地）。這些相似的高適應度個體（可能包含重複的雙胞胎）會主導交配池，透過微小的突變與重組，進行極其細緻的局部尋優，這是演算法能找到最終最佳解的關鍵步驟。
 
-總結來說，Tabu 機制是防止大型問題早熟收斂的一劑猛藥，但對於解空間較小、需要高度密集開發（Intensification）的場景，適度關閉或降低 Tabu 的嚴格度，才能獲得更穩定的搜尋表現。
+然而，我們設計的 Tabu 機制嚴格禁止同一代出現重複的 Hash 值。當族群開始收斂時，演算法會因為頻繁產生相似的子代而觸發碰撞。根據實作邏輯，當重試 10 次仍無法產生獨特個體時，系統會強制觸發「隨機移民（Random Immigration）」，引入完全隨機的全新排列以填補族群空缺。
 
+對於 $N=20$ 的小型問題，隨機生成的排列與優良解的距離不至於過度遙遠，偶爾的隨機擾動反而能幫助跳脫區域最佳解；但對於 $N=50$ 或 $N=100$ 的大型問題，其解空間呈現階乘級別的爆炸增長。此時，強制塞入的隨機個體其 Makespan 通常極度糟糕，形同於在族群中不斷注入無用的「雜訊」。為了滿足嚴格的「不重複」約束條件，Tabu-GA 不斷丟棄那些本應被用來進行局部細緻開發的優良子結構，把運算資源浪費在評估劣質的隨機解上。最終導致演算法失去了收斂與微調的能力，搜尋效率大幅衰退。
 
 \clearpage
 
