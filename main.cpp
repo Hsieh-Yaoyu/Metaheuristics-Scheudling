@@ -77,6 +77,7 @@ public:
 
     enum CrossoverType{ OX, LOX, PMX, CX };
 
+    enum MutationType{ Insertion, Swap };
 
     // --- 新增：定義「個體」的資料結構 ---
     struct Individual{
@@ -384,14 +385,31 @@ private:
 
 
     // --- 新增：突變算子 (Swap Mutation) ---
-    void mutate(Individual &ind, double mutation_rate){
-        std::uniform_real_distribution<double> prob(0.0, 1.0);
-        if(prob(rng) < mutation_rate){
-            std::uniform_int_distribution<int> dist(0, num_jobs - 1);
-            int idx1 = dist(rng);
-            int idx2 = dist(rng);
-            while(idx1 == idx2) idx2 = dist(rng);
-            std::swap(ind.chromosome[idx1], ind.chromosome[idx2]);
+    void mutate(Individual &ind, double mutation_rate, MutationType mutation_type = Insertion){
+
+        if(mutation_type == Insertion){
+            std::uniform_real_distribution<double> prob(0.0, 1.0);
+            if(prob(rng) < mutation_rate){
+                std::uniform_int_distribution<int> dist(0, num_jobs - 1);
+                int idx1 = dist(rng);
+                int idx2 = dist(rng);
+                while(idx1 == idx2) idx2 = dist(rng);
+
+                // 抽出 idx1 的工作，並插入到 idx2 的位置
+                int job = ind.chromosome[idx1];
+                ind.chromosome.erase(ind.chromosome.begin() + idx1);
+                ind.chromosome.insert(ind.chromosome.begin() + idx2, job);
+            }
+        }
+        else if(mutation_type == Swap){
+            std::uniform_real_distribution<double> prob(0.0, 1.0);
+            if(prob(rng) < mutation_rate){
+                std::uniform_int_distribution<int> dist(0, num_jobs - 1);
+                int idx1 = dist(rng);
+                int idx2 = dist(rng);
+                while(idx1 == idx2) idx2 = dist(rng);
+                std::swap(ind.chromosome[idx1], ind.chromosome[idx2]);
+            }
         }
     }
 
@@ -467,8 +485,11 @@ public:
     // ==========================================
     // 基因演算法 (Genetic Algorithm) 主程式
     // ==========================================
-    std::vector<int> genetic_algorithm(int pop_size = 50, int max_gen = 1000, double crossover_rate = 0.8, double mutation_rate = 0.1,
-        CrossoverType crossover_type = OX, bool with_tabu = false, bool dynamic_tabu = false, bool do_neh = false,
+    std::vector<int> genetic_algorithm(
+        int pop_size = 50, int max_gen = 1000,
+        double crossover_rate = 0.8, double mutation_rate = 0.1,
+        CrossoverType crossover_type = OX, bool with_tabu = false,
+        bool dynamic_tabu = false, bool do_neh = false, MutationType mutation_type = Insertion,
         std::string instance_name = "Instance", std::string save_dir = "./img"){
 
         std::cout << "Run GA with " << cross_str(crossover_type) << (with_tabu ? " (Tabu Enabled)" : "") << std::endl;
@@ -499,7 +520,7 @@ public:
 
         // Tabu Hash 相關設定 (僅在 with_tabu == true 時發揮作用)
         std::unordered_map<uint64_t, int> tabu_list;
-        int tabu_tenure = 5;
+        int tabu_tenure = 10;
 
         auto compute_hash = [](const std::vector<int> &arr) -> uint64_t{
             uint64_t hash_val = 0;
@@ -512,6 +533,7 @@ public:
             return hash_val;
         };
 
+        const int halving = max_gen / 2 / 10; // 用於動態調整禁忌期限的參考點
         // 世代演化迴圈
         for(int gen = 0; gen < max_gen; ++gen){
             std::vector<Individual> next_generation;
@@ -527,8 +549,8 @@ public:
                 tabu_list[best_hash] = gen + tabu_tenure;
             }
 
-            if(dynamic_tabu && gen % 50 == 0){
-                tabu_tenure = 10 - (gen / 50); // 隨著世代增加，逐步加長禁忌期限
+            if(dynamic_tabu && gen % halving == 0){
+                tabu_tenure = 10 - (gen / halving); // 隨著世代增加，逐步加長禁忌期限
                 if(tabu_tenure == 0){
                     std::cout << "Tabu tenure has reached 0, disabling tabu mechanism.\n";
                     with_tabu = false;
@@ -568,8 +590,8 @@ public:
                         off2 = (prob(rng) < 0.5) ? p1 : p2;
                     }
 
-                    mutate(off1, mutation_rate);
-                    mutate(off2, mutation_rate);
+                    mutate(off1, mutation_rate, mutation_type);
+                    mutate(off2, mutation_rate, mutation_type);
 
                     off1.makespan = evaluator.run_scheduling(off1.chromosome);
                     off2.makespan = evaluator.run_scheduling(off2.chromosome);
@@ -721,7 +743,7 @@ void calculate_and_write_stats(std::ofstream &csv, const std::string &name, cons
 
 int main(){
 
-    #define TABU_TEST false
+#define TABU_TEST false
     // MetaheuristicSolver solver(*(new Scheduling()), 10);
     // solver.cross_test();
 
@@ -733,7 +755,7 @@ int main(){
     }
 
     std::ofstream csv_file("results.csv");
-    csv_file << "Instance,GA_OX_tabu_Min,GA_OX_tabu_Avg,GA_OX_tabu_Max,GA_OX_Min_tabu_dynamic,GA_OX_Avg_dynamic,GA_OX_Max_dynamic,\n";
+    csv_file << "Instance,GA_OX_Min,GA_OX_Avg,GA_OX_Max,GA_OX_neh_Min,GA_OX_neh_Avg,GA_OX_neh_Max\n";
     // csv_file << "Instance,GA_OX_Min,GA_OX_Avg,GA_OX_Max,GA_LOX_Min,GA_LOX_Avg,GA_LOX_Max,GA_PMX_Min,GA_PMX_Avg,GA_PMX_Max,GA_CX_Min,GA_CX_Avg,GA_CX_Max\n";
 
     int NUM_RUNS = 20;
@@ -767,13 +789,13 @@ int main(){
 
                 MetaheuristicSolver solver(scheduler, tc.num_jobs);
                 std::vector<int> ox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1,
-                    MetaheuristicSolver::OX, true, false, false,
-                    tc.instance_name + "_GA_OX_tabu", save_dir);
+                    MetaheuristicSolver::OX, false, false, false, MetaheuristicSolver::MutationType::Swap,
+                    tc.instance_name + "_GA_OX_", save_dir);
                 ox_results[run - 1] = scheduler.run_scheduling(ox_res);
 
                 std::vector<int> ox_res2 = solver.genetic_algorithm(50, 1000, 0.8, 0.1,
-                    MetaheuristicSolver::OX, true, true, false,
-                    tc.instance_name + "_GA_OX_tabu_dynamic", save_dir);
+                    MetaheuristicSolver::OX, false, false, true, MetaheuristicSolver::MutationType::Swap,
+                    tc.instance_name + "_GA_OX_neh", save_dir);
                 ox_results2[run - 1] = scheduler.run_scheduling(ox_res2);
 
                 // std::vector<int> lox_res = solver.genetic_algorithm(50, 1000, 0.8, 0.1, MetaheuristicSolver::LOX, TABU_TEST, tc.instance_name + "_GA_LOX", save_dir);
@@ -792,8 +814,8 @@ int main(){
             }
 
             csv_file << tc.instance_name << ",";
-            calculate_and_write_stats(csv_file, "GA_OX_tabu_", ox_results);
-            calculate_and_write_stats(csv_file, "GA_OX_tabu_dynamic", ox_results2);
+            calculate_and_write_stats(csv_file, "GA_OX_", ox_results);
+            calculate_and_write_stats(csv_file, "GA_OX_neh", ox_results2);
             // calculate_and_write_stats(csv_file, "GA_LOX", lox_results);
             // calculate_and_write_stats(csv_file, "GA_PMX", pmx_results);
             // calculate_and_write_stats(csv_file, "GA_CX", cx_results);
