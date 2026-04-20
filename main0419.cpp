@@ -93,6 +93,8 @@ public:
 
     enum MutationType{ Insertion, Swap };
 
+    enum LSSelectionType{ Elite, Top5Random };
+
     // --- 新增：定義「個體」的資料結構 ---
     struct Individual{
         std::vector<int> chromosome; // 排列方式 (染色體)
@@ -583,8 +585,8 @@ public:
         int pop_size = 50,
         double crossover_rate = 0.8, double mutation_rate = 0.1,
         CrossoverType crossover_type = OX, bool with_tabu = false,
-        bool dynamic_tabu = false, bool do_neh = false, bool use_sa_local_search = false, int ls_iters = 20, double init_temp = 20, double cooling_rate = 0.9,
-        MutationType mutation_type = Insertion, std::string instance_name = "Instance", std::string save_dir = "./img"){
+        bool dynamic_tabu = false, bool do_neh = false, bool use_sa_local_search = false, int ls_gen_num = 20, int ls_iters = 20, double init_temp = 20, double cooling_rate = 0.9,
+        LSSelectionType ls_selection_type = Elite,  MutationType mutation_type = Insertion, std::string instance_name = "Instance", std::string save_dir = "./img"){
         
         std::cout << "Run MA with " << cross_str(crossover_type) << (with_tabu ? " (Tabu Enabled)" : "") << std::endl;
 
@@ -800,16 +802,25 @@ public:
             // 找到當代最佳個體
             auto best_it = std::min_element(population.begin(), population.end());
 
-            // Local search(SA), 每10代從前5名隨機選1個做 local search
-            if(gen % 10 == 0 && use_sa_local_search && current_ffe < max_ffe){
-                std::sort(population.begin(), population.end());
+            // Local search(SA), 某幾代從前5名隨機選1個做 local search
+            if(gen % ls_gen_num == 0 && use_sa_local_search && current_ffe < max_ffe){
+                if(ls_selection_type == Elite){
+                    auto best_it = std::min_element(population.begin(), population.end());
+                    if(best_it != population.end()){
+                        sa_insertion_local_search(*best_it, current_ffe, max_ffe, ls_iters, init_temp, cooling_rate);
+                    }
+                }
+                else if(ls_selection_type == Top5Random){
+                    std::sort(population.begin(), population.end());
 
                 int top_k = std::min(5, static_cast<int>(population.size()));
                 std::uniform_int_distribution<int> top_dist(0, top_k - 1);
                 int selected_idx = top_dist(rng);
 
                 sa_insertion_local_search(population[selected_idx], current_ffe, max_ffe, ls_iters, init_temp, cooling_rate);
+                }
             }
+            
 
             // 更新歷史最佳解
             current_best = *std::min_element(population.begin(), population.end());
@@ -877,7 +888,7 @@ void calculate_and_write_stats(std::ofstream &csv, const std::string &name, cons
         << std::fixed << std::setprecision(2) << avg_runtime << ",";}
 
 int main(){
-
+std::cout << "HI";
 #define TABU_TEST false
     // MetaheuristicSolver solver(*(new Scheduling()), 10);
     // solver.cross_test();
@@ -889,10 +900,10 @@ int main(){
     }
 
     std::ofstream csv_file("results.csv");
-         csv_file << "Instance,LOX_Min,LOX_Avg,LOX_Max,LOX_Std,LOX_AvgGen,LOX_AvgTime,LOX_ls_Min,LOX_ls_Avg,LOX_ls_Max,LOX_ls_Std,LOX_ls_AvgGen,LOX_ls_AvgTime\n";
-    // csv_file << "Instance, OX_Min,OX_Avg,OX_Max,OX_Std,LOX_Min,LOX_Avg,LOX_Max,LOX_Std,PMX_Min,PMX_Avg,PMX_Max,PMX_Std,CX_Min,CX_Avg,CX_Max,CX_Std\n";
-    // csv_file << "Instance,MA_OX_Min,MA_OX_Avg,MA_OX_dev,MA_OX_neh_Min,MA_OX_neh_Avg,MA_OX_neh_dev\n";
-    // csv_file << "Instance,MA_OX_Min,MA_OX_Avg,MA_OX_Max,MA_LOX_Min,MA_LOX_Avg,MA_LOX_Max,MA_PMX_Min,MA_PMX_Avg,MA_PMX_Max,MA_CX_Min,MA_CX_Avg,MA_CX_Max\n";
+    csv_file << "Instance,LOX_iter20_Min,LOX_iter20_Avg,LOX_iter20_Max,LOX_iter20_Std,LOX_iter20_AvgGen,LOX_iter20_AvgTime,LOX_gen50_Min,LOX_gen50_Avg,LOX_gen50_Max,LOX_gen50_Std,LOX_gen50_AvgGen,LOX_gen50_AvgTime,LOX_gen100_Min,LOX_gen100_Avg,LOX_gen100_Max,LOX_gen100_Std,LOX_gen100_AvgGen,LOX_gen100_AvgTime\n";
+    //csv_file << "Instance, OX_Min,OX_Avg,OX_Max,OX_Std,LOX_Min,LOX_Avg,LOX_Max,LOX_Std,PMX_Min,PMX_Avg,PMX_Max,PMX_Std,CX_Min,CX_Avg,CX_Max,CX_Std\n";
+    //csv_file << "Instance,MA_LOX_Min,MA_LOX_Avg,MA_LOX_dev,MA_OX_neh_Min,MA_OX_neh_Avg,MA_OX_neh_dev\n";
+    //csv_file << "Instance,MA_OX_Min,MA_OX_Avg,MA_OX_Max,MA_LOX_Min,MA_LOX_Avg,MA_LOX_Max,MA_PMX_Min,MA_PMX_Avg,MA_PMX_Max,MA_CX_Min,MA_CX_Avg,MA_CX_Max\n";
 
     int NUM_RUNS = 20;
 
@@ -910,10 +921,14 @@ int main(){
 
             std::vector<int> lox_results(NUM_RUNS);
             std::vector<int> lox_results2(NUM_RUNS);
+            std::vector<int> lox_results3(NUM_RUNS);
             std::vector<int> lox_gen(NUM_RUNS);
             std::vector<int> lox_gen2(NUM_RUNS);
+            std::vector<int> lox_gen3(NUM_RUNS);
             std::vector<double> lox_time(NUM_RUNS);
             std::vector<double> lox_time2(NUM_RUNS);
+            std::vector<double> lox_time3(NUM_RUNS);
+
 
 
             for(int run = 1; run <= NUM_RUNS; ++run){
@@ -927,18 +942,23 @@ int main(){
                 MetaheuristicSolver solver(scheduler, tc.num_jobs);
 
                 auto lox_res = solver.memetic_algorithm(50, 0.8, 0.5,
-                    MetaheuristicSolver::LOX, false, false, true, false, 100, 200, 0.95, MetaheuristicSolver::MutationType::Insertion,
-                    tc.instance_name + "_MA_LOX", save_dir);
+                    MetaheuristicSolver::LOX, false, false, true, false, 20, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
+                    tc.instance_name + "_MA_LOX_gen10", save_dir);
                 lox_results[run - 1] = lox_res.makespan;
                 lox_gen[run - 1] = lox_res.total_gen;
                 lox_time[run - 1] = lox_res.runtime_sec;
                 auto lox_res2 = solver.memetic_algorithm(50, 0.8, 0.5,
-                    MetaheuristicSolver::LOX, false, false, true, true, 100, 200, 0.95, MetaheuristicSolver::MutationType::Insertion,
-                    tc.instance_name + "_MA_LOX_LS", save_dir);
+                    MetaheuristicSolver::LOX, false, false, true, true, 50, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
+                    tc.instance_name + "_MA_LOX_gen20", save_dir);
                 lox_results2[run - 1] = lox_res2.makespan;
                 lox_gen2[run - 1] = lox_res2.total_gen;
                 lox_time2[run - 1] = lox_res2.runtime_sec;
-
+                auto lox_res3 = solver.memetic_algorithm(50, 0.8, 0.5,
+                    MetaheuristicSolver::LOX, false, false, true, true, 100, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
+                    tc.instance_name + "_MA_LOX_Top5", save_dir);
+                lox_results3[run - 1] = lox_res3.makespan;
+                lox_gen3[run - 1] = lox_res3.total_gen;
+                lox_time3[run - 1] = lox_res3.runtime_sec;
 
 
 #pragma omp critical
@@ -947,8 +967,9 @@ int main(){
                 }
             }
             csv_file << tc.instance_name << ",";
-            calculate_and_write_stats(csv_file, "LOX", lox_results,lox_gen,lox_time);
-            calculate_and_write_stats(csv_file, "LOX_ls", lox_results2,lox_gen2,lox_time2);
+            calculate_and_write_stats(csv_file, "LOX_gen10", lox_results,lox_gen,lox_time);
+            calculate_and_write_stats(csv_file, "LOX_gen20", lox_results2,lox_gen2,lox_time2);
+            calculate_and_write_stats(csv_file, "LOX_Top5", lox_results3,lox_gen3,lox_time3);
             csv_file << "\n";
 
             std::cout << ">> " << tc.instance_name << " 統計資料已寫入 results.csv\n";
