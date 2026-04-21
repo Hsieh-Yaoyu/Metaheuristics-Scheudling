@@ -8,7 +8,7 @@
 #include <numeric>
 #include <iomanip>
 #include <string>
-#include <omp.h> // �ޤJ OpenMP ���Y��
+#include <omp.h> // 引入 OpenMP 標頭檔
 #include <unordered_map>
 #include <cstdint>
 #include <unordered_set>
@@ -39,7 +39,7 @@ struct TestCase{
 bool read_taillard_file(const std::string &filepath, TestCase &tc){
     std::ifstream file(filepath);
     if(!file.is_open()){
-        std::cerr << "Error: �L�k�}���ɮ� " << filepath << "\n";
+        std::cerr << "Error: 無法開啟檔案 " << filepath << "\n";
         return false;
     }
 
@@ -95,12 +95,12 @@ public:
 
     enum LSSelectionType{ Elite, Top5Random };
 
-    // --- �s�W�G�w�q�u����v����Ƶ��c ---
+    // --- 新增：定義「個體」的資料結構 ---
     struct Individual{
-        std::vector<int> chromosome; // �ƦC�覡 (�V����)
-        int makespan;                // �ؼШ�ƭ� (�A����)
+        std::vector<int> chromosome; // 排列方式 (染色體)
+        int makespan;                // 目標函數值 (適應度)
 
-        // ��K�ƧǡGMakespan �V�p�V�n
+        // 方便排序：Makespan 越小越好
         bool operator<(const Individual &other) const{
             return makespan < other.makespan;
         }
@@ -129,10 +129,10 @@ private:
     int num_jobs;
     std::mt19937 rng;
     std::vector<int> makespan_history, best_makespan_history, median_makespan_history;
-    // ���ͳ�@�H������
+    // 產生單一隨機個體
 
 
-    // --- �s�W�GMA ��ܾ��� (Tournament Selection) ---
+    // --- 新增：MA 選擇機制 (Tournament Selection) ---
     Individual tournament_selection(const std::vector<Individual> &population, int k = 3){
         std::uniform_int_distribution<int> dist(0, population.size() - 1);
         Individual best_participant = population[dist(rng)];
@@ -146,42 +146,42 @@ private:
         return best_participant;
     }
 
-    // --- �s�W�GFFE�����w��W�� ---
+    // --- 新增：FFE評估預算上限 ---
     int evaluate(const std::vector<int> &chromosome, int &ffe_counter){
-        ffe_counter++; // �C�I�s�@���A�o�̴N�۰� +1
+        ffe_counter++; // 每呼叫一次，這裡就自動 +1
         return evaluator.run_scheduling(chromosome);
     }
 
-    // --- �s�W�GNEH �غc���ҵo��k ---
+    // --- 新增：NEH 建構式啟發算法 ---
     std::vector<int> generate_neh_solution(int &ffe_count){
-        // �B�J 1 & 2�G�p��C�Ӥu�@���`�B�z�ɶ��A�åѤj��p�Ƨ�
+        // 步驟 1 & 2：計算每個工作的總處理時間，並由大到小排序
         std::vector<std::pair<int, int>> job_totals(num_jobs);
         for(int i = 0; i < num_jobs; ++i){
-            // �Q�� evaluator ������@�u�@ i ���ɶ� (���P��Ӥu�@�b�Ҧ��������ɶ��`�M)
+            // 利用 evaluator 評估單一工作 i 的時間 (等同於該工作在所有機器的時間總和)
             int total_time = evaluate({ i }, ffe_count);
             job_totals[i] = { total_time, i };
         }
 
-        // �̷��`�ɶ������Ƨ� (�Ѥj��p)
+        // 依照總時間降冪排序 (由大到小)
         std::sort(job_totals.begin(), job_totals.end(), [](const auto &a, const auto &b){
             return a.first > b.first;
         });
 
-        // �B�J 3�G�̧Ƕi��̨δ��J (Best Insertion)
+        // 步驟 3：依序進行最佳插入 (Best Insertion)
         std::vector<int> current_seq;
-        current_seq.push_back(job_totals[0].second); // ����J�`�ɶ��̪����u�@
+        current_seq.push_back(job_totals[0].second); // 先放入總時間最長的工作
 
         for(int i = 1; i < num_jobs; ++i){
             int job_to_insert = job_totals[i].second;
             int best_makespan = 1e9;
             int best_pos = -1;
 
-            // ���մ��J�ثe�ǦC���Ҧ��i���m (�q 0 �� i)
+            // 測試插入目前序列的所有可能位置 (從 0 到 i)
             for(int pos = 0; pos <= i; ++pos){
                 std::vector<int> temp_seq = current_seq;
                 temp_seq.insert(temp_seq.begin() + pos, job_to_insert);
 
-                // �����o�ӡu�����Ƶ{�v�� Makespan
+                // 評估這個「部分排程」的 Makespan
                 int current_makespan = evaluate(temp_seq, ffe_count);
 
                 if(current_makespan < best_makespan){
@@ -189,30 +189,30 @@ private:
                     best_pos = pos;
                 }
             }
-            // �T�w�̨Φ�m��A�������J
+            // 確定最佳位置後，正式插入
             current_seq.insert(current_seq.begin() + best_pos, job_to_insert);
         }
 
         return current_seq;
     }
 
-    // --- �s�W�GOrder Crossover (OX) ��t��l ---
+    // --- 新增：Order Crossover (OX) 交配算子 ---
     std::pair<Individual, Individual> order_crossover(const Individual &p1, const Individual &p2){
         Individual offspring1, offspring2;
         offspring1.chromosome.assign(num_jobs, -1);
         offspring2.chromosome.assign(num_jobs, -1);
 
-        // 1. �H����ܨ�Ӥ��I (Cut points)�A��Ӥl�N�@�γo�դ��I
+        // 1. 隨機選擇兩個切點 (Cut points)，兩個子代共用這組切點
         std::uniform_int_distribution<int> dist(0, num_jobs - 1);
         int cut1 = dist(rng);
         int cut2 = dist(rng);
         if(cut1 > cut2) std::swap(cut1, cut2);
 
-        // �O�����ǰ�]�w�g�Q��J�l�N��
+        // 記錄哪些基因已經被放入子代中
         std::vector<bool> in_offspring1(num_jobs, false);
         std::vector<bool> in_offspring2(num_jobs, false);
 
-        // 2. �ƻs���I�d�򤺪���]��������l�N
+        // 2. 複製切點範圍內的基因到對應的子代
         for(int i = cut1; i <= cut2; ++i){
             offspring1.chromosome[i] = p1.chromosome[i];
             in_offspring1[p1.chromosome[i]] = true;
@@ -221,7 +221,7 @@ private:
             in_offspring2[p2.chromosome[i]] = true;
         }
 
-        // 3. ��e��ɳѾl����m
+        // 3. 交叉填補剩餘的位置
         int p2_idx = (cut2 + 1) % num_jobs;
         int off1_idx = (cut2 + 1) % num_jobs;
 
@@ -229,7 +229,7 @@ private:
         int off2_idx = (cut2 + 1) % num_jobs;
 
         for(int i = 0; i < num_jobs; ++i){
-            // �B�z offspring1: �q Parent 2 �̧Ƕ��
+            // 處理 offspring1: 從 Parent 2 依序填補
             int gene_from_p2 = p2.chromosome[p2_idx];
             if(!in_offspring1[gene_from_p2]){
                 offspring1.chromosome[off1_idx] = gene_from_p2;
@@ -237,7 +237,7 @@ private:
             }
             p2_idx = (p2_idx + 1) % num_jobs;
 
-            // �B�z offspring2: �q Parent 1 �̧Ƕ��
+            // 處理 offspring2: 從 Parent 1 依序填補
             int gene_from_p1 = p1.chromosome[p1_idx];
             if(!in_offspring2[gene_from_p1]){
                 offspring2.chromosome[off2_idx] = gene_from_p1;
@@ -249,23 +249,23 @@ private:
         return { offspring1, offspring2 };
     }
 
-    // --- �s�W�GLinear Order Crossover (LOX) ��t��l ---
+    // --- 新增：Linear Order Crossover (LOX) 交配算子 ---
     std::pair<Individual, Individual> linear_order_crossover(const Individual &p1, const Individual &p2){
         Individual offspring1, offspring2;
         offspring1.chromosome.assign(num_jobs, -1);
         offspring2.chromosome.assign(num_jobs, -1);
 
-        // 1. �H����ܨ�Ӥ��I (Cut points)
+        // 1. 隨機選擇兩個切點 (Cut points)
         std::uniform_int_distribution<int> dist(0, num_jobs - 1);
         int cut1 = dist(rng);
         int cut2 = dist(rng);
         if(cut1 > cut2) std::swap(cut1, cut2);
 
-        // �O�����ǰ�]�w�g�Q��J�l�N��
+        // 記錄哪些基因已經被放入子代中
         std::vector<bool> in_offspring1(num_jobs, false);
         std::vector<bool> in_offspring2(num_jobs, false);
 
-        // 2. �ƻs���I�d�򤺪���]��������l�N (�o�����P OX �ۦP)
+        // 2. 複製切點範圍內的基因到對應的子代 (這部分與 OX 相同)
         for(int i = cut1; i <= cut2; ++i){
             offspring1.chromosome[i] = p1.chromosome[i];
             in_offspring1[p1.chromosome[i]] = true;
@@ -274,7 +274,7 @@ private:
             in_offspring2[p2.chromosome[i]] = true;
         }
 
-        // 3. �����t�@�Ӥ��N���u�|���Q�ϥΡv����] (�O���ѥ��ܥk������)
+        // 3. 收集另一個父代中「尚未被使用」的基因 (保持由左至右的順序)
         std::vector<int> remaining_for_off1;
         std::vector<int> remaining_for_off2;
 
@@ -287,10 +287,10 @@ private:
             }
         }
 
-        // 4. �ѥ��ܥk (Linear) �̧Ƕ�ɤl�N���Ŧ� (���L cut1 �� cut2 ���Ϭq)
+        // 4. 由左至右 (Linear) 依序填補子代的空位 (跳過 cut1 到 cut2 的區段)
         int idx1 = 0, idx2 = 0;
         for(int i = 0; i < num_jobs; ++i){
-            // �p�G�O�b���I�d�򤺡A�������L (�]���w�g�b�B�J 2 ��n�F)
+            // 如果是在切點範圍內，直接跳過 (因為已經在步驟 2 填好了)
             if(i >= cut1 && i <= cut2) continue;
 
             offspring1.chromosome[i] = remaining_for_off1[idx1++];
@@ -300,60 +300,60 @@ private:
         return { offspring1, offspring2 };
     }
 
-    // --- �s�W�GPartially-Mapped Crossover (PMX) ��t��l ---
+    // --- 新增：Partially-Mapped Crossover (PMX) 交配算子 ---
     std::pair<Individual, Individual> partially_mapped_crossover(const Individual &p1, const Individual &p2){
         Individual offspring1, offspring2;
         offspring1.chromosome.assign(num_jobs, -1);
         offspring2.chromosome.assign(num_jobs, -1);
 
-        // 1. �H����ܨ�Ӥ��I (Cut points)
+        // 1. 隨機選擇兩個切點 (Cut points)
         std::uniform_int_distribution<int> dist(0, num_jobs - 1);
         int cut1 = dist(rng);
         int cut2 = dist(rng);
         if(cut1 > cut2) std::swap(cut1, cut2);
 
-        // �O�����ǰ�]�w�g�u�s�b����I�d�򤺡v�A�ΥH�P�_�O�_�Ĭ�
+        // 記錄哪些基因已經「存在於切點範圍內」，用以判斷是否衝突
         std::vector<bool> in_off1_middle(num_jobs, false);
         std::vector<bool> in_off2_middle(num_jobs, false);
 
-        // �إ����V�M�g�� (Mapping dictionaries)
+        // 建立雙向映射表 (Mapping dictionaries)
         std::vector<int> map_p1_to_p2(num_jobs, -1);
         std::vector<int> map_p2_to_p1(num_jobs, -1);
 
-        // 2. �ƻs���I�d�򤺪���]�A�ëإ߬M�g���Y
+        // 2. 複製切點範圍內的基因，並建立映射關係
         for(int i = cut1; i <= cut2; ++i){
             int gene1 = p1.chromosome[i];
             int gene2 = p2.chromosome[i];
 
-            // ��J�l�N 1 �P �l�N 2 �������q��
+            // 填入子代 1 與 子代 2 的中間段落
             offspring1.chromosome[i] = gene1;
             in_off1_middle[gene1] = true;
 
             offspring2.chromosome[i] = gene2;
             in_off2_middle[gene2] = true;
 
-            // �������۹������M�g���Y
+            // 紀錄互相對應的映射關係
             map_p1_to_p2[gene1] = gene2;
             map_p2_to_p1[gene2] = gene1;
         }
 
-        // 3. ��ɤ��I�H�~���Ѿl��m
+        // 3. 填補切點以外的剩餘位置
         for(int i = 0; i < num_jobs; ++i){
-            // ���L�����w�g��n������
+            // 跳過中間已經填好的部分
             if(i >= cut1 && i <= cut2) continue;
 
-            // --- �B�z Offspring 1 (�~�� Parent 2 ���~���]) ---
+            // --- 處理 Offspring 1 (繼承 Parent 2 的外圍基因) ---
             int candidate1 = p2.chromosome[i];
-            // �p�G�o�ͽĬ� (�Ӱ�]�w�g�b Offspring 1 �������q�X�{�L)
-            // �N�z�L�M�g����X���N��]�A�o�� while �j��৹���ѨM�s��M�g�����D
+            // 如果發生衝突 (該基因已經在 Offspring 1 的中間段出現過)
+            // 就透過映射表找出替代基因，這組 while 迴圈能完美解決連鎖映射的問題
             while(in_off1_middle[candidate1]){
                 candidate1 = map_p1_to_p2[candidate1];
             }
             offspring1.chromosome[i] = candidate1;
 
-            // --- �B�z Offspring 2 (�~�� Parent 1 ���~���]) ---
+            // --- 處理 Offspring 2 (繼承 Parent 1 的外圍基因) ---
             int candidate2 = p1.chromosome[i];
-            // �P�˪��޿�A�ϦV�d��
+            // 同樣的邏輯，反向查表
             while(in_off2_middle[candidate2]){
                 candidate2 = map_p2_to_p1[candidate2];
             }
@@ -363,47 +363,47 @@ private:
         return { offspring1, offspring2 };
     }
 
-    // --- �s�W�GCycle Crossover (CX) ��t��l ---
+    // --- 新增：Cycle Crossover (CX) 交配算子 ---
     std::pair<Individual, Individual> cycle_crossover(const Individual &p1, const Individual &p2){
         Individual offspring1, offspring2;
         offspring1.chromosome.assign(num_jobs, -1);
         offspring2.chromosome.assign(num_jobs, -1);
 
-        // �إ߯��ެd���G��H O(1) �ɶ����u�Y�Ӱ�]�b Parent 1 ������m�v
+        // 建立索引查表：能以 O(1) 時間找到「某個基因在 Parent 1 中的位置」
         std::vector<int> p1_index_of(num_jobs, 0);
         for(int i = 0; i < num_jobs; ++i){
             p1_index_of[p1.chromosome[i]] = i;
         }
 
-        // �O�����Ǧ�m�w�g�Q Cycle ���X�L
+        // 記錄哪些位置已經被 Cycle 走訪過
         std::vector<bool> visited(num_jobs, false);
 
-        // 1. ��X�Ĥ@�� Cycle (�o�̩T�w�q index 0 �}�l)
+        // 1. 找出第一個 Cycle (這裡固定從 index 0 開始)
         int current_idx = 0;
 
-        // ���٨S¶�^�_�I�Φ��j��ɡA�~��l��
+        // 當還沒繞回起點形成迴圈時，繼續追蹤
         while(!visited[current_idx]){
             visited[current_idx] = true;
 
-            // �b Cycle ���G
-            // �l�N 1 �~�� Parent 1 �Ӧ�m����]
+            // 在 Cycle 內：
+            // 子代 1 繼承 Parent 1 該位置的基因
             offspring1.chromosome[current_idx] = p1.chromosome[current_idx];
-            // �l�N 2 �~�� Parent 2 �Ӧ�m����]
+            // 子代 2 繼承 Parent 2 該位置的基因
             offspring2.chromosome[current_idx] = p2.chromosome[current_idx];
 
-            // �M��U�@�� index�G
-            // ��X Parent 2 �b���e��m����]�A�ìd�߸Ӱ�]�b Parent 1 ����m
+            // 尋找下一個 index：
+            // 找出 Parent 2 在當前位置的基因，並查詢該基因在 Parent 1 的位置
             int val_in_p2 = p2.chromosome[current_idx];
             current_idx = p1_index_of[val_in_p2];
         }
 
-        // 2. �N�D Cycle �d�򪺳Ѿl��m�A�Ρu�t�@�� Parent�v�������
+        // 2. 將非 Cycle 範圍的剩餘位置，用「另一個 Parent」直接填補
         for(int i = 0; i < num_jobs; ++i){
             if(!visited[i]){
-                // ���b Cycle ���G
-                // �l�N 1 �~�� Parent 2 �Ӧ�m����]
+                // 不在 Cycle 內：
+                // 子代 1 繼承 Parent 2 該位置的基因
                 offspring1.chromosome[i] = p2.chromosome[i];
-                // �l�N 2 �~�� Parent 1 �Ӧ�m����]
+                // 子代 2 繼承 Parent 1 該位置的基因
                 offspring2.chromosome[i] = p1.chromosome[i];
             }
         }
@@ -412,7 +412,7 @@ private:
     }
 
 
-    // --- �s�W�G���ܺ�l (Swap Mutation) ---
+    // --- 新增：突變算子 (Swap & Insertion) ---
     void mutate(Individual &ind, double mutation_rate, MutationType mutation_type = Insertion){
 
         if(mutation_type == Insertion){
@@ -423,7 +423,7 @@ private:
                 int idx2 = dist(rng);
                 while(idx1 == idx2) idx2 = dist(rng);
 
-                // ��X idx1 ���u�@�A�ô��J�� idx2 ����m
+                // 抽出 idx1 的工作，並插入到 idx2 的位置
                 int job = ind.chromosome[idx1];
                 ind.chromosome.erase(ind.chromosome.begin() + idx1);
                 ind.chromosome.insert(ind.chromosome.begin() + idx2, job);
@@ -441,7 +441,7 @@ private:
         }
     }
 
-    // --- �s�W�GTabu Search (swap) �@������ local search ---
+    // --- 新增：SA 作為個體 local search ---
     void sa_insertion_local_search(
         Individual &ind, int &ffe_counter, int max_ffe, int max_ls_iter = 20, double init_temp = 50, double cooling_rate = 0.90){
 
@@ -522,7 +522,7 @@ private:
             fprintf(pipe, "set xlabel 'Iteration'\n");
             fprintf(pipe, "set ylabel 'Makespan'\n");
 
-            // �P�_�O�_������Ƹ�� (MA �M��)
+            // 判斷是否有中位數資料 (MA 專用)
             bool has_median = !median_makespan_history.empty();
 
             if(has_median){
@@ -535,19 +535,19 @@ private:
                     "'-' with lines title 'Current Makespan' lc rgb 'red'\n");
             }
 
-            // �ǰe�̨θѸ�� (�Žu)
+            // 傳送最佳解資料 (藍線)
             for(size_t i = 0; i < best_makespan_history.size(); ++i){
                 fprintf(pipe, "%zu %d\n", i, best_makespan_history[i]);
             }
             fprintf(pipe, "e\n");
 
-            // �ǰe���N/�����Ѹ�� (���u)
+            // 傳送當代/探索解資料 (紅線)
             for(size_t i = 0; i < makespan_history.size(); ++i){
                 fprintf(pipe, "%zu %d\n", i, makespan_history[i]);
             }
             fprintf(pipe, "e\n");
 
-            // �p�G������ơA�ǰe����Ƹ�� (��u)
+            // 如果有中位數，傳送中位數資料 (綠線)
             if(has_median){
                 for(size_t i = 0; i < median_makespan_history.size(); ++i){
                     fprintf(pipe, "%zu %d\n", i, median_makespan_history[i]);
@@ -579,7 +579,7 @@ public:
 
 
     // ==========================================
-    // �g�]�t��k (Memetic Algorithm) �D�{��
+    // 迷因演算法 (Memetic Algorithm) 主程式
     // ==========================================
     MAResult memetic_algorithm(
         int pop_size = 50,
@@ -596,12 +596,12 @@ public:
         makespan_history.clear();
         median_makespan_history.clear();
 
-        // 1. ��l�Ʊڸs (Initialization)
+        // 1. 初始化族群 (Initialization)
         int current_ffe = 0;
         int max_ffe = pop_size * 1000;
         std::vector<Individual> population;
         for(int i = 0; i < pop_size; ++i){
-            // �[�J NEH �u�����
+            // 加入 NEH 優質個體
             if(do_neh && i == 0){
                 Individual neh_seed;
                 neh_seed.chromosome = generate_neh_solution(current_ffe);
@@ -609,18 +609,18 @@ public:
                 population.push_back(neh_seed);
                 std::cout << "  [Info] Injected NEH Seed with Makespan: " << neh_seed.makespan << std::endl;
             }
-            // �ڸs���[�J Random ����
+            // 族群中加入 Random 個體
             else{
                 population.push_back(generate_random_individual(current_ffe));
             }
         }
 
-        // �M���l�̨θ�
+        // 尋找初始最佳解
         Individual global_best = *std::min_element(population.begin(), population.end());
 
         std::uniform_real_distribution<double> prob(0.0, 1.0);
 
-        // Tabu Hash �����]�w (�Ȧb with_tabu == true �ɵo���@��)
+        // Tabu Hash 相關設定 (僅在 with_tabu == true 時發揮作用)
         std::unordered_map<uint64_t, int> tabu_list;
         int gen_tabu_tenure = 10;
 
@@ -635,55 +635,55 @@ public:
             return hash_val;
         };
 
-        // �@�N�t�ưj��
-        int gen = 0; // �O�d gen �ȥΩ�έp�P�e�ϡA���A�@�������ܼ�
+        // 世代演化迴圈
+        int gen = 0; // 保留 gen 僅用於統計與畫圖，不再作為控制變數
         while(current_ffe < max_ffe){
             gen++;
 
             std::vector<Individual> next_generation;
             std::unordered_set<uint64_t> current_pop_hashes;
 
-            // �׭^�O�d���� (Elitism)
+            // 菁英保留策略 (Elitism)
             Individual current_best = *std::min_element(population.begin(), population.end());
             next_generation.push_back(current_best);
 
             if(with_tabu){
-                // 1. �p��i�פ�� (0.0 �� 1.0)
+                // 1. 計算進度比例 (0.0 到 1.0)
                 double progress = static_cast<double>(current_ffe) / max_ffe;
 
                 
                 if(dynamic_tabu){
-                    // 2. �u�ʰI����G��l tenure �� 10�A�H�� FFE �W�[�I��� 0
+                // 2. 線性衰減公式：初始 tenure 為 10，隨著 FFE 增加衰減至 0
                     gen_tabu_tenure = 10 - static_cast<int>(progress * 10);
 
                     
-                    // 3. �T�O���p�� 0
+                // 3. 確保不小於 0
                     gen_tabu_tenure = std::max(1, gen_tabu_tenure);
                     // std::cout << "  [Info] Generation: " << gen << ", FFE: " << current_ffe << ", Progress: " << (progress * 100) << "%, Tabu Tenure: " << gen_tabu_tenure << std::endl;
                     if(gen_tabu_tenure == 1){
                         std::cout << "  [Info] Dynamic Tabu Tenure reached 0 at FFE: " << current_ffe << std::endl;
-                        with_tabu = false; // Tabu List ���A
+                        with_tabu = false; 
                     }
                 }
                 else{
-                    gen_tabu_tenure = 10; // ���� static tabu tenure
+                    gen_tabu_tenure = 10; // static tabu tenure
                 }
-                // 4. ��s Tabu List
-                // �`�N�G�o�̪����ϥη��e�� tabu_tenure�A���ݭn�B�~�P�_
+                // 4. 更新 Tabu List
+                // 注意：這裡直接使用當前的 tabu_tenure，不需要額外判斷
                 uint64_t best_hash = compute_hash(current_best.chromosome);
                 current_pop_hashes.insert(best_hash);
 
-                // �� tabu_tenure �� 0 �ɡA�g�J gen + 0�A�T���ˬd�|�۰ʥ���
+                // 當 tabu_tenure 為 0 時，寫入 gen + 0，禁忌檢查會自動失效
                 tabu_list[best_hash] = gen + gen_tabu_tenure;
             }
 
-            // ���ͤU�@�N (����ƶq���� pop_size)
+            // 產生下一代 (直到數量等於 pop_size)
             while(next_generation.size() < pop_size){
                 Individual p1 = tournament_selection(population);
                 Individual p2 = tournament_selection(population);
                 Individual off1, off2;
                 // ====================================================
-                // ���| A�G�쥻���º� MA (�����歫�Ʊư��P�ƧǸT��)
+                // 路徑 A：原本的純粹 MA (不執行重複排除與排序禁忌)
                 // ====================================================
                 if(!with_tabu){
                     if(prob(rng) < crossover_rate){
@@ -709,7 +709,7 @@ public:
                         off2 = (prob(rng) < 0.5) ? p1 : p2;
                     }
 
-                    // ���� (Mutation)
+                    // 突變 (Mutation)
                     mutate(off1, mutation_rate, mutation_type);
                     mutate(off2, mutation_rate, mutation_type);
 
@@ -722,7 +722,7 @@ public:
                     }
                 }
                 // ====================================================
-                // ���| B�G�[�W Tabu �P�P�N���Ʊư���� MA
+                // 路徑 B：加上 Tabu 與同代重複排除機制的 MA
                 // ====================================================
                 else{
                     bool off1_valid = false;
@@ -732,7 +732,7 @@ public:
                     while(retries < 10 && (!off1_valid || !off2_valid)){
                         Individual temp1 = p1, temp2 = p2;
 
-                        // ��t (Crossover)
+                        // 交配 (Crossover)
                         if(prob(rng) < crossover_rate){
                             if(crossover_type == OX){
                                 auto offsprings = order_crossover(p1, p2);
@@ -752,7 +752,7 @@ public:
                             }
                         }
 
-                        // ���� (Mutation)
+                        // 突變 (Mutation)
                         mutate(temp1, mutation_rate, mutation_type);
                         mutate(temp2, mutation_rate, mutation_type);
 
@@ -804,16 +804,16 @@ public:
                         }
                         next_generation.push_back(off2);
                     }
-                } // End of else (���| B)
+                } // End of else (路徑 B)
             }
 
-            // ��s�ڸs
+            // 更新族群
             population = next_generation;
 
-            // �����N�̨έ���
+            // 找到當代最佳個體
             auto best_it = std::min_element(population.begin(), population.end());
 
-            // Local search(SA), �Y�X�N�q�e5�W�H����1�Ӱ� local search
+            // Local search(SA), 某幾代從前5名隨機選1個做 local search
             if(gen % ls_gen_num == 0 && use_sa_local_search && current_ffe < max_ffe){
                 if(ls_selection_type == Elite){
                     auto best_it = std::min_element(population.begin(), population.end());
@@ -833,13 +833,13 @@ public:
             }
 
 
-            // ��s���v�̨θ�
+            // 更新歷史最佳解
             current_best = *std::min_element(population.begin(), population.end());
             if(current_best.makespan < global_best.makespan){
                 global_best = current_best;
             }
 
-            // �p�⤤���
+            // 計算中位數
             std::vector<int> current_makespans(pop_size);
             for(int i = 0; i < pop_size; ++i){
                 current_makespans[i] = population[i].makespan;
@@ -900,19 +900,19 @@ void calculate_and_write_stats(std::ofstream &csv, const std::string &name, cons
 }
 
 int main(){
-    std::cout << "HI";
 #define TABU_TEST false
     // MetaheuristicSolver solver(*(new Scheduling()), 10);
     // solver.cross_test();
     // /*
     std::string test_case_dir = "./Test_case";
     if(!fs::exists(test_case_dir) || !fs::is_directory(test_case_dir)){
-        std::cerr << "�䤣���Ƨ�: " << test_case_dir << "\n";
+        std::cerr << "找不到資料夾: " << test_case_dir << "\n";
         return 1;
     }
 
     std::ofstream csv_file("results.csv");
-    csv_file << "Instance,LOX_iter20_Min,LOX_iter20_Avg,LOX_iter20_Max,LOX_iter20_Std,LOX_iter20_AvgGen,LOX_iter20_AvgTime,LOX_gen50_Min,LOX_gen50_Avg,LOX_gen50_Max,LOX_gen50_Std,LOX_gen50_AvgGen,LOX_gen50_AvgTime,LOX_gen100_Min,LOX_gen100_Avg,LOX_gen100_Max,LOX_gen100_Std,LOX_gen100_AvgGen,LOX_gen100_AvgTime\n";
+    csv_file << "Instance,LOX_iter20_Min,LOX_iter20_Avg,LOX_iter20_Max,LOX_iter20_Std,LOX_iter20_AvgGen,LOX_iter20_AvgTime\n";
+    //csv_file << "Instance,LOX_iter20_Min,LOX_iter20_Avg,LOX_iter20_Max,LOX_iter20_Std,LOX_iter20_AvgGen,LOX_iter20_AvgTime,LOX_gen50_Min,LOX_gen50_Avg,LOX_gen50_Max,LOX_gen50_Std,LOX_gen50_AvgGen,LOX_gen50_AvgTime,LOX_gen100_Min,LOX_gen100_Avg,LOX_gen100_Max,LOX_gen100_Std,LOX_gen100_AvgGen,LOX_gen100_AvgTime\n";
     //csv_file << "Instance, OX_Min,OX_Avg,OX_Max,OX_Std,LOX_Min,LOX_Avg,LOX_Max,LOX_Std,PMX_Min,PMX_Avg,PMX_Max,PMX_Std,CX_Min,CX_Avg,CX_Max,CX_Std\n";
     //csv_file << "Instance,MA_LOX_Min,MA_LOX_Avg,MA_LOX_dev,MA_OX_neh_Min,MA_OX_neh_Avg,MA_OX_neh_dev\n";
     //csv_file << "Instance,MA_OX_Min,MA_OX_Avg,MA_OX_Max,MA_LOX_Min,MA_LOX_Avg,MA_LOX_Max,MA_PMX_Min,MA_PMX_Avg,MA_PMX_Max,MA_CX_Min,MA_CX_Avg,MA_CX_Max\n";
@@ -923,7 +923,7 @@ int main(){
         if(entry.path().extension() == ".txt"){
             std::string filepath = entry.path().string();
             std::cout << "========================================\n";
-            std::cout << "�}�l����: " << filepath << " (�@ " << NUM_RUNS << " ���������)\n";
+            std::cout << "開始測試: " << filepath << " (共 " << NUM_RUNS << " 次平行執行)\n";
 
             TestCase tc;
             if(!read_taillard_file(filepath, tc)) continue;
@@ -953,43 +953,43 @@ int main(){
 
                 MetaheuristicSolver solver(scheduler, tc.num_jobs);
 
-                auto lox_res = solver.memetic_algorithm(50, 0.8, 0.5,
-                    MetaheuristicSolver::LOX, false, false, true, false, 20, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
-                    tc.instance_name + "LOX_Without_Tabu", save_dir);
-                lox_results[run - 1] = lox_res.makespan;
-                lox_gen[run - 1] = lox_res.total_gen;
-                lox_time[run - 1] = lox_res.runtime_sec;
+                // auto lox_res = solver.memetic_algorithm(50, 0.8, 0.5,
+                //     MetaheuristicSolver::LOX, false, false, false, false, 20, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
+                //     tc.instance_name + "LOX_Without_Tabu", save_dir);
+                // lox_results[run - 1] = lox_res.makespan;
+                // lox_gen[run - 1] = lox_res.total_gen;
+                // lox_time[run - 1] = lox_res.runtime_sec;
                 auto lox_res2 = solver.memetic_algorithm(50, 0.8, 0.5,
-                    MetaheuristicSolver::LOX, true, false, true, false, 50, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
+                    MetaheuristicSolver::LOX, true, true, true, true, 50, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
                     tc.instance_name + "LOX_Static_Tabu", save_dir);
                 lox_results2[run - 1] = lox_res2.makespan;
                 lox_gen2[run - 1] = lox_res2.total_gen;
                 lox_time2[run - 1] = lox_res2.runtime_sec;
-                auto lox_res3 = solver.memetic_algorithm(50, 0.8, 0.5,
-                    MetaheuristicSolver::LOX, true, true, true, false, 100, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
-                    tc.instance_name + "LOX_Dynamic_Tabu", save_dir);
-                lox_results3[run - 1] = lox_res3.makespan;
-                lox_gen3[run - 1] = lox_res3.total_gen;
-                lox_time3[run - 1] = lox_res3.runtime_sec;
+                // auto lox_res3 = solver.memetic_algorithm(50, 0.8, 0.5,
+                //     MetaheuristicSolver::LOX, true, true, true, false, 100, 50, 200, 0.95, MetaheuristicSolver::LSSelectionType::Top5Random, MetaheuristicSolver::MutationType::Insertion,
+                //     tc.instance_name + "LOX_Dynamic_Tabu", save_dir);
+                // lox_results3[run - 1] = lox_res3.makespan;
+                // lox_gen3[run - 1] = lox_res3.total_gen;
+                // lox_time3[run - 1] = lox_res3.runtime_sec;
 
 
 #pragma omp critical
                 {
-                    std::cout << "  - �� " << run << " �����槹���A�Ϥ��w�x�s�� " << save_dir << "\n";
+                    std::cout << "  - 第 " << run << " 次執行完成，圖片已儲存至 " << save_dir << "\n";
                 }
             }
             csv_file << tc.instance_name << ",";
-            calculate_and_write_stats(csv_file, "LOX_Without_Tabu", lox_results, lox_gen, lox_time);
-            calculate_and_write_stats(csv_file, "LOX_Static_Tabu", lox_results2, lox_gen2, lox_time2);
-            calculate_and_write_stats(csv_file, "LOX_Dynamic_Tabu", lox_results3, lox_gen3, lox_time3);
+            // calculate_and_write_stats(csv_file, "LOX_Without_Tabu", lox_results, lox_gen, lox_time);
+            calculate_and_write_stats(csv_file, "LOX_BKS", lox_results2, lox_gen2, lox_time2);
+            // calculate_and_write_stats(csv_file, "LOX_Dynamic_Tabu", lox_results3, lox_gen3, lox_time3);
             csv_file << "\n";
 
-            std::cout << ">> " << tc.instance_name << " �έp��Ƥw�g�J results.csv\n";
+            std::cout << ">> " << tc.instance_name << " 統計資料已寫入 results.csv\n";
         }
     }
 
     csv_file.close();
-    std::cout << "�Ҧ�������槹���I���G�w�ץX�� results.csv\n";
+    std::cout << "所有測資執行完畢！結果已匯出至 results.csv\n";
     // */
     return 0;
 }
