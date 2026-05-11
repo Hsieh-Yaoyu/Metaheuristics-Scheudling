@@ -9,112 +9,120 @@ using namespace std;
 using namespace cv;
 
 // --- 演算法參數 ---
-const double ALPHA = 4.0;       // 提高費洛蒙(含排斥力)的影響力 (原為1.0)
-const double BETA = 1.0;        // 稍微降低啟發式(最短距離)的絕對吸引力 (原為2.0)
+const double ALPHA = 5.0;
+const double BETA = 1.0;
 const double rho = 0.1;
 const double Q = 200.0;
 const double se_phero = 80;
-const int ANT_COUNT = 80;       // 每種管線的螞蟻數量
-const int MAX_ITER = 500;       // 最大迭代次數
-const int CELL_SIZE = 25;       // 視覺化網格大小
-const int DIFFUSION_RADIUS = 2; // 費洛蒙擴散半徑 
+const int ANT_COUNT = 40;
+const double MAX_PHERO = 500.0; // --- 新增：費洛蒙天花板 ---
+const int MAX_ITER = 500;
+const int CELL_SIZE = 25;
+const int DIFFUSION_RADIUS = 1;
 
-// --- 視覺化顏色設定 (OpenCV 使用 BGR 格式) ---
-const Scalar COLOR_BG = Scalar(255, 255, 255);     // 背景 (白)
-const Scalar COLOR_WALL = Scalar(50, 50, 50);        // 牆壁 (深灰)
-const Scalar COLOR_GRID = Scalar(200, 200, 200);     // 網格線 (淺灰)
+// --- 視覺化顏色設定 ---
+const Scalar COLOR_BG = Scalar(255, 255, 255);
+const Scalar COLOR_WALL = Scalar(50, 50, 50);
+const Scalar COLOR_GRID = Scalar(200, 200, 200);
 
-const Scalar COLOR_GAS = Scalar(0, 255, 255);       // 瓦斯管 (橘色)
-const Scalar COLOR_ELEC = Scalar(255, 225, 0);       // 電管 (黃色)
+const Scalar COLOR_GAS = Scalar(0, 255, 255);
+const Scalar COLOR_ELEC = Scalar(255, 225, 0);
 
-// --- 管線屬性定義  ---
+// --- 管線屬性定義 ---
 enum PipeType{ GAS = 0, ELEC = 1 };
 const int TYPE_COUNT = 2;
-// 排斥矩陣：GAS遇GAS相吸(1), 遇ELEC排斥(-1)；ELEC同理
 int preference[TYPE_COUNT][TYPE_COUNT] = {
     { 1, -1 },
     {-1,  1 }
 };
 
-// --- 地圖定義 ---
-// g/G: 瓦斯管(Gas)起終點, e/E: 電管(Elec)起終點, 1: 牆壁, 0: 空氣
-// --- 地圖定義 ---
+// --- 多端點地圖定義 ---
+// 現在支援多個起點(g, e)與終點(G, E)
 const vector<string> grid_map = {
     "g00000000000000000000000",
     "000000000000000000000000",
     "001111001111110011110000",
     "001111001111110011110000",
-    "000E00000000000000000000",
+    "00000000000000E000000000",
+    "110011111100001111110011",
+    "110011111100001111110011",
+    "G00000000000000000000000",
+    "00000000000000000G000000",
+    "000000000000000000000000",
+    "E00000000000000000000000",
     "110011111100001111110011",
     "110011111100001111110011",
     "000000000000000000000000",
-    "000000000000000000000000",
-    "000000000000000000000000",
-    "000000000000000000000000",
-    "110011111100001111110011",
-    "110011111100001111110011",
-    "0000000000000e0000000000",
     "001111001111110011110000",
     "001111001111110011110000",
     "000000000000000000000000",
-    "0000000G0000000000000000"
+    "00000000000e000000000000"
 };
 
 int rows = grid_map.size();
 int cols = grid_map[0].size();
-Point start_pos[TYPE_COUNT], end_pos[TYPE_COUNT];
 
-// 費洛蒙場: pheromones[type][y][x]
+// --- 修改1：將起終點改為動態陣列 ---
+vector<Point> start_pos[TYPE_COUNT], end_pos[TYPE_COUNT];
 vector<vector<vector<double>>> pheromones;
 
-// 擴展後的螞蟻結構
 struct Ant{
-    int type;           // 管線屬性
+    int type;
     Point pos;
-    Point last_dir;     // 記錄上一次的行進方向，用於轉彎評估 
+    Point last_dir;
+    Point target_pos;
     vector<Point> path;
     vector<vector<bool>> visited;
     bool reached_end;
     bool stuck;
 
-    Ant(int t){
+    // --- 修改2：建構子現在接收特定的出生起點 ---
+    Ant(int t, Point start_p, Point end_p){
         type = t;
-        pos = start_pos[t];
+        pos = start_p;
         last_dir = Point(0, 0);
         path.push_back(pos);
         visited.assign(rows, vector<bool>(cols, false));
         visited[pos.y][pos.x] = true;
         reached_end = false;
+        target_pos = end_p;
         stuck = false;
     }
 };
 
-double getHeuristic(Point p, int type){
-    double dist = sqrt(pow(p.x - end_pos[type].x, 2) + pow(p.y - end_pos[type].y, 2));
+// --- 修改3：動態尋找最近的終點 ---
+double getHeuristic(Point p, Point target){
+    double dist = sqrt(pow(p.x - target.x, 2) + pow(p.y - target.y, 2));
     return 1.0 / (dist + 1.0);
 }
 
 void init(){
     pheromones.assign(TYPE_COUNT, vector<vector<double>>(rows, vector<double>(cols, 0.1)));
+
+    // 清空並收集所有的起終點
+    for(int t = 0; t < TYPE_COUNT; t++){
+        start_pos[t].clear();
+        end_pos[t].clear();
+    }
+
     for(int y = 0; y < rows; y++){
         for(int x = 0; x < cols; x++){
-            if(grid_map[y][x] == 'g') start_pos[GAS] = Point(x, y);
-            if(grid_map[y][x] == 'G') end_pos[GAS] = Point(x, y);
-            if(grid_map[y][x] == 'e') start_pos[ELEC] = Point(x, y);
-            if(grid_map[y][x] == 'E') end_pos[ELEC] = Point(x, y);
+            if(grid_map[y][x] == 'g') start_pos[GAS].push_back(Point(x, y));
+            if(grid_map[y][x] == 'G') end_pos[GAS].push_back(Point(x, y));
+            if(grid_map[y][x] == 'e') start_pos[ELEC].push_back(Point(x, y));
+            if(grid_map[y][x] == 'E') end_pos[ELEC].push_back(Point(x, y));
         }
     }
 
-    // --- 新增：為起點與終點建立「初始排斥防護罩」 ---
-    // 這會與我們之前的排斥係數 gamma 完美配合
+    // 為所有起點與終點建立「初始排斥防護罩」
     for(int t = 0; t < TYPE_COUNT; t++){
-        Point terminals[2] = { start_pos[t], end_pos[t] };
+        vector<Point> all_terminals;
+        all_terminals.insert(all_terminals.end(), start_pos[t].begin(), start_pos[t].end());
+        all_terminals.insert(all_terminals.end(), end_pos[t].begin(), end_pos[t].end());
 
-        for(int i = 0; i < 2; i++){
-            Point p = terminals[i];
-            pheromones[t][p.y][p.x] = se_phero; // 中心點給予極高濃度
+        for(const auto &p : all_terminals){
+            pheromones[t][p.y][p.x] = se_phero;
 
-            // 依據擴散半徑向外遞減，形成力場
             for(int dy = -DIFFUSION_RADIUS; dy <= DIFFUSION_RADIUS; dy++){
                 for(int dx = -DIFFUSION_RADIUS; dx <= DIFFUSION_RADIUS; dx++){
                     int ny = p.y + dy;
@@ -122,7 +130,6 @@ void init(){
                     if(ny >= 0 && ny < rows && nx >= 0 && nx < cols){
                         double dist_val = sqrt(dx * dx + dy * dy);
                         if(dist_val <= DIFFUSION_RADIUS && dist_val > 0){
-                            // 距離越近，防護罩濃度越高
                             pheromones[t][ny][nx] += se_phero / (dist_val + 1.0);
                         }
                     }
@@ -132,10 +139,29 @@ void init(){
     }
 }
 
+// 注意：函式簽名維持不變，以相容你的 main 呼叫
+// 注意：函式簽名維持不變，以相容你的 main 呼叫
 void drawSimulation(const vector<Ant> &ants, int iteration, double max_phero[]){
-    // 使用全域背景色初始化影像
     Mat img(rows * CELL_SIZE, cols * CELL_SIZE, CV_8UC3, COLOR_BG);
 
+    // --- 視覺化優化核心 ---
+    double display_max[TYPE_COUNT] = { 0.1, 0.1 };
+    double actual_max[TYPE_COUNT] = { 0.1, 0.1 }; // 新增：用於尋找真正的最高濃度路徑
+
+    // 1. 掃描取得真正的最高濃度與視覺天花板
+    for(int t = 0; t < TYPE_COUNT; t++){
+        for(int y = 0; y < rows; y++){
+            for(int x = 0; x < cols; x++){
+                if(pheromones[t][y][x] > actual_max[t]){
+                    actual_max[t] = pheromones[t][y][x];
+                }
+            }
+        }
+        // 視覺天花板依舊鎖定在 100，保證擴散邊緣的底色飽和度
+        display_max[t] = min(actual_max[t], 100.0);
+    }
+
+    // 2. 繪製網格底色 (維持原有的混色邏輯)
     for(int y = 0; y < rows; y++){
         for(int x = 0; x < cols; x++){
             Rect rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
@@ -143,51 +169,70 @@ void drawSimulation(const vector<Ant> &ants, int iteration, double max_phero[]){
                 rectangle(img, rect, COLOR_WALL, FILLED);
             }
             else{
-                double gas_int = pheromones[GAS][y][x] / max_phero[GAS];
-                double elec_int = pheromones[ELEC][y][x] / max_phero[ELEC];
-                double total_int = gas_int + elec_int;
+                double gas_int = min(1.0, pheromones[GAS][y][x] / display_max[GAS]);
+                double elec_int = min(1.0, pheromones[ELEC][y][x] / display_max[ELEC]);
+                double max_int = max(gas_int, elec_int);
 
-                // --- 泛用型費洛蒙混色邏輯 ---
-                if(total_int > 0.05){
-                    // 計算兩種費洛蒙在當前格子的比例
-                    double w_gas = gas_int / total_int;
-                    double w_elec = elec_int / total_int;
+                if(max_int > 0.05){
+                    double sum_int = gas_int + elec_int;
+                    double w_gas = gas_int / sum_int;
+                    double w_elec = elec_int / sum_int;
 
-                    // 依比例混和出目標管線顏色
                     double target_b = COLOR_GAS[0] * w_gas + COLOR_ELEC[0] * w_elec;
                     double target_g = COLOR_GAS[1] * w_gas + COLOR_ELEC[1] * w_elec;
                     double target_r = COLOR_GAS[2] * w_gas + COLOR_ELEC[2] * w_elec;
 
-                    // 根據總濃度與背景色進行線性漸層混色
-                    double blend = min(1.0, total_int); // 濃度最高不超過 1.0 (實色)
-                    int final_b = COLOR_BG[0] * (1.0 - blend) + target_b * blend;
-                    int final_g = COLOR_BG[1] * (1.0 - blend) + target_g * blend;
-                    int final_r = COLOR_BG[2] * (1.0 - blend) + target_r * blend;
+                    int final_b = COLOR_BG[0] * (1.0 - max_int) + target_b * max_int;
+                    int final_g = COLOR_BG[1] * (1.0 - max_int) + target_g * max_int;
+                    int final_r = COLOR_BG[2] * (1.0 - max_int) + target_r * max_int;
 
                     rectangle(img, rect, Scalar(final_b, final_g, final_r), FILLED);
                 }
-
-                rectangle(img, rect, COLOR_GRID, 1); // 繪製網格
+                rectangle(img, rect, COLOR_GRID, 1);
             }
         }
     }
 
-    // 繪製起終點
+    // --- 新增：3. 繪製最高濃度路徑的外框 (管線實體化) ---
     for(int t = 0; t < TYPE_COUNT; t++){
-        Scalar c = (t == GAS) ? COLOR_GAS : COLOR_ELEC;
-        rectangle(img, Rect(start_pos[t].x * CELL_SIZE, start_pos[t].y * CELL_SIZE, CELL_SIZE, CELL_SIZE), c, FILLED);
-        rectangle(img, Rect(end_pos[t].x * CELL_SIZE, end_pos[t].y * CELL_SIZE, CELL_SIZE, CELL_SIZE), c, 2);
+        // 只有當該管線的最高濃度明顯大於起點防護罩(例如 >85.0)時，才代表真正有路徑成形
+        if(actual_max[t] > 85.0){
+            for(int y = 0; y < rows; y++){
+                for(int x = 0; x < cols; x++){
+
+                    // 閥值設定：濃度達到最高值的 60% 視為主幹線
+                    if(pheromones[t][y][x] >= actual_max[t] * 0.6){
+                        Rect rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+
+                        // 計算較深的外框顏色，讓管線看起來更有立體感 (原色減去 120)
+                        Scalar base_c = (t == GAS) ? COLOR_GAS : COLOR_ELEC;
+                        Scalar outline_c = Scalar(max(0.0, base_c[0] - 120), max(0.0, base_c[1] - 120), max(0.0, base_c[2] - 120));
+
+                        // 繪製粗外框 (Thickness = 2)
+                        rectangle(img, rect, outline_c, 2);
+                    }
+                }
+            }
+        }
     }
 
-    // 繪製螞蟻
+    // 4. 繪製所有的起終點
+    for(int t = 0; t < TYPE_COUNT; t++){
+        Scalar c = (t == GAS) ? COLOR_GAS : COLOR_ELEC;
+        for(const auto &sp : start_pos[t]){
+            rectangle(img, Rect(sp.x * CELL_SIZE, sp.y * CELL_SIZE, CELL_SIZE, CELL_SIZE), c, FILLED);
+        }
+        for(const auto &ep : end_pos[t]){
+            rectangle(img, Rect(ep.x * CELL_SIZE, ep.y * CELL_SIZE, CELL_SIZE, CELL_SIZE), c, 2);
+        }
+    }
+
+    // 5. 繪製螞蟻
     for(const auto &ant : ants){
         if(!ant.reached_end){
             Point center(ant.pos.x * CELL_SIZE + CELL_SIZE / 2, ant.pos.y * CELL_SIZE + CELL_SIZE / 2);
             Scalar ant_color = (ant.type == GAS) ? COLOR_GAS : COLOR_ELEC;
-
-            // 為了讓螞蟻在費洛蒙上更明顯，稍微把螞蟻畫深一點點 (可選)
-            Scalar draw_color = Scalar(max(0.0, ant_color[0] - 30), max(0.0, ant_color[1] - 30), max(0.0, ant_color[2] - 30));
-
+            Scalar draw_color = Scalar(max(0.0, ant_color[0] - 50), max(0.0, ant_color[1] - 50), max(0.0, ant_color[2] - 50));
             circle(img, center, CELL_SIZE / 4, draw_color, FILLED);
         }
     }
@@ -205,12 +250,22 @@ int main(){
 
     for(int iter = 1; iter <= MAX_ITER; iter++){
         vector<Ant> ants;
+
+        // --- 修改5：將螞蟻平均分配給各個起點 ---
+// --- 修改5：將螞蟻平均分配給各個起點，並同時分配專屬的目標終點 ---
         for(int i = 0; i < ANT_COUNT; i++){
-            ants.push_back(Ant(GAS));
-            ants.push_back(Ant(ELEC));
+            if(!start_pos[GAS].empty() && !end_pos[GAS].empty()){
+                Point gas_start = start_pos[GAS][i % start_pos[GAS].size()];
+                Point gas_end = end_pos[GAS][i % end_pos[GAS].size()]; // 依序分配目標終點
+                ants.push_back(Ant(GAS, gas_start, gas_end));
+            }
+            if(!start_pos[ELEC].empty() && !end_pos[ELEC].empty()){
+                Point elec_start = start_pos[ELEC][i % start_pos[ELEC].size()];
+                Point elec_end = end_pos[ELEC][i % end_pos[ELEC].size()]; // 依序分配目標終點
+                ants.push_back(Ant(ELEC, elec_start, elec_end));
+            }
         }
 
-        // 正規化費洛蒙基準，用於計算擴散反應參數 gamma 
         double max_phero[TYPE_COUNT] = { 0.1, 0.1 };
         for(int t = 0; t < TYPE_COUNT; t++){
             for(int y = 0; y < rows; y++){
@@ -238,38 +293,71 @@ int main(){
                         char cell = grid_map[next_p.y][next_p.x];
                         bool is_wall = (cell == '1');
 
-                        // --- 新增：判斷是否為「其他管線的起終點」 ---
                         bool is_other_terminal = false;
                         if(ant.type == GAS && (cell == 'e' || cell == 'E')) is_other_terminal = true;
                         if(ant.type == ELEC && (cell == 'g' || cell == 'G')) is_other_terminal = true;
 
+                        // --- 修改6：檢查是否進入「任何一個」自己的起終點無敵領域 ---
+                        bool in_home_zone = false;
+                        for(const auto &sp : start_pos[ant.type]){
+                            if(sqrt(pow(next_p.x - sp.x, 2) + pow(next_p.y - sp.y, 2)) <= DIFFUSION_RADIUS){
+                                in_home_zone = true; break;
+                            }
+                        }
+                        if(!in_home_zone){
+                            for(const auto &ep : end_pos[ant.type]){
+                                if(sqrt(pow(next_p.x - ep.x, 2) + pow(next_p.y - ep.y, 2)) <= DIFFUSION_RADIUS){
+                                    in_home_zone = true; break;
+                                }
+                            }
+                        }
 
-                        if(!is_wall && !is_other_terminal && !ant.visited[next_p.y][next_p.x]){
-
-                            // 1. 計算費洛蒙強度 gamma 
-                            double gamma = 1.0;
+                        // 在 main 迴圈檢查方向處
+                        bool is_force_field = false;
+                        if(!in_home_zone){
                             for(int t = 0; t < TYPE_COUNT; t++){
                                 if(t != ant.type){
-                                    // 只有當對方的費洛蒙明顯高於底線(0.1)時，才視為有管線經過
-                                    if(pheromones[t][next_p.y][next_p.x] > 0.15){
-                                        double intensity = pheromones[t][next_p.y][next_p.x] / max_phero[t];
+                                    double other_p = pheromones[t][next_p.y][next_p.x];
+                                    double own_p = pheromones[ant.type][next_p.y][next_p.x];
 
-                                        // 乘上放大係數 (例如 5.0)，讓排斥力變得極度強烈
-                                        gamma += preference[ant.type][t] * intensity * 10.0;
+                                    // 修改：只有對方濃度極高(>天花板的40%)，且我方幾乎沒走過時，才視為物理牆壁
+                                    // 這讓螞蟻能依靠軟性排斥力(gamma)自然繞道，而不是在起點就被強制卡死
+                                    if(other_p > MAX_PHERO * 0.4 && own_p < 2.0){
+                                        is_force_field = true;
                                     }
                                 }
                             }
-                            // 若被強烈排斥，將機率降到極低 (原為0.01，改為0.0001讓螞蟻更不願意走)
+                        }
+
+                        if(!is_wall && !is_other_terminal && !is_force_field && !ant.visited[next_p.y][next_p.x]){
+
+                            double gamma = 1.0;
+                            for(int t = 0; t < TYPE_COUNT; t++){
+                                if(t != ant.type){
+                                    double other_p = pheromones[t][next_p.y][next_p.x];
+                                    double own_p = pheromones[ant.type][next_p.y][next_p.x];
+                                    if(other_p > 1.0 && other_p > own_p){
+                                        gamma *= exp(-(other_p - own_p) / 10.0);
+                                    }
+                                }
+                            }
                             gamma = max(0.0001, gamma);
 
-                            // 2. 轉彎懲罰評估 
                             double bend_penalty = 1.0;
                             if(ant.last_dir != Point(0, 0) && dirs[i] != ant.last_dir){
                                 bend_penalty = 0.5;
                             }
 
                             next_steps.push_back(next_p);
-                            double p = pow(pheromones[ant.type][next_p.y][next_p.x] * gamma, ALPHA) * pow(getHeuristic(next_p, ant.type) * bend_penalty, BETA);
+
+                            // --- 核心修復：加入「自身費洛蒙感知天花板」 ---
+                            // 限制螞蟻對自身費洛蒙的最大感知濃度 (例如 10.0)
+                            // 這樣就能避免被自己起點高達 80 的防護罩引力給困住，讓啟發式(BETA)能發揮作用把螞蟻拉出門
+                            double perceived_own_p = min(pheromones[ant.type][next_p.y][next_p.x], 10.0);
+
+                            // 使用 perceived_own_p 來計算機率，取代原本的絕對濃度
+                            double p = pow(perceived_own_p * gamma, ALPHA) * pow(getHeuristic(next_p, ant.target_pos) * bend_penalty, BETA);
+
                             probabilities.push_back(p);
                             prob_sum += p;
                         }
@@ -297,7 +385,11 @@ int main(){
                     ant.path.push_back(ant.pos);
                     ant.visited[ant.pos.y][ant.pos.x] = true;
 
-                    if(ant.pos == end_pos[ant.type]) ant.reached_end = true;
+                    // --- 修改7：檢查是否抵達「任何一個」自己的終點 ---
+                    if(ant.pos == ant.target_pos){
+                        ant.reached_end = true;
+                        break;
+                    }
                 }
             }
             drawSimulation(ants, iter, max_phero);
@@ -313,17 +405,15 @@ int main(){
             }
         }
 
-        // --- 改為以下這段「全範圍防護罩刷新」邏輯 ---
-        // 確保起終點與其周圍的擴散力場永遠維持在一定的底線，不會被完全揮發
+        // --- 修改8：刷新所有起終點的防護罩 ---
         for(int t = 0; t < TYPE_COUNT; t++){
-            Point terminals[2] = { start_pos[t], end_pos[t] };
-            for(int i = 0; i < 2; i++){
-                Point p = terminals[i];
+            vector<Point> all_terminals;
+            all_terminals.insert(all_terminals.end(), start_pos[t].begin(), start_pos[t].end());
+            all_terminals.insert(all_terminals.end(), end_pos[t].begin(), end_pos[t].end());
 
-                // 1. 鎖定正中心點
+            for(const auto &p : all_terminals){
                 pheromones[t][p.y][p.x] = max(se_phero, pheromones[t][p.y][p.x]);
 
-                // 2. 重新刷新周圍的擴散力場
                 for(int dy = -DIFFUSION_RADIUS; dy <= DIFFUSION_RADIUS; dy++){
                     for(int dx = -DIFFUSION_RADIUS; dx <= DIFFUSION_RADIUS; dx++){
                         int ny = p.y + dy;
@@ -331,11 +421,7 @@ int main(){
                         if(ny >= 0 && ny < rows && nx >= 0 && nx < cols){
                             double dist_val = sqrt(dx * dx + dy * dy);
                             if(dist_val <= DIFFUSION_RADIUS && dist_val > 0){
-
-                                // 計算該距離應有的基礎防護罩濃度 (數值可依需求微調)
-                                double shield_val = (se_phero / 2.0) / (dist_val + 1.0);
-
-                                // 使用 max 確保濃度不會低於防護罩底線
+                                double shield_val = se_phero / (dist_val + 1.0);
                                 pheromones[t][ny][nx] = max(pheromones[t][ny][nx], shield_val);
                             }
                         }
@@ -344,12 +430,10 @@ int main(){
             }
         }
 
-        // 費洛蒙線性擴散 (Dilation) 與 轉彎獎勵機制
         // 費洛蒙線性擴散 (Dilation) 與 轉彎/排斥 獎懲機制
         for(const auto &ant : ants){
             if(ant.reached_end){
 
-                // 1. 計算該螞蟻最終路徑的轉彎次數
                 int turn_count = 0;
                 if(ant.path.size() > 2){
                     for(size_t i = 1; i < ant.path.size() - 1; i++){
@@ -361,13 +445,10 @@ int main(){
                     }
                 }
 
-                // --- 新增：2. 計算路徑上踩到的「排斥性(其他管線)費洛蒙」總量 ---
                 double enemy_phero_penalty = 0.0;
                 for(const auto &p : ant.path){
                     for(int t = 0; t < TYPE_COUNT; t++){
-                        // 檢查其他管線的費洛蒙
                         if(t != ant.type){
-                            // 設定一個閥值 (例如 1.0)，只懲罰踩到對方「明顯軌跡」的行為，忽略極淡的擴散邊緣
                             if(pheromones[t][p.y][p.x] > 1.0){
                                 enemy_phero_penalty += pheromones[t][p.y][p.x];
                             }
@@ -375,19 +456,24 @@ int main(){
                     }
                 }
 
-                // 3. 綜合評分公式 (路徑長度 + 轉彎懲罰 + 排斥懲罰)
-                const double turn_penalty_weight = 5.0;
-                const double enemy_penalty_weight = 2.0; // 踩到對方費洛蒙的扣分權重 (可依需求微調)
+                const double turn_penalty_weight = 2.0;
+                const double enemy_penalty_weight = 5.0;
 
-                // path_score 越高代表路徑品質越差
-                double path_score = ant.path.size() +
+
+                Point start_p = ant.path.front();
+                double ideal_steps = abs(start_p.x - ant.target_pos.x) + abs(start_p.y - ant.target_pos.y);
+                if(ideal_steps < 1.0) ideal_steps = 1.0; // 避免除以零
+
+                double raw_path_score = ant.path.size() * 3 +
                     (turn_count * turn_penalty_weight) +
                     (enemy_phero_penalty * enemy_penalty_weight);
 
-                // 4. 計算實際釋放的費洛蒙貢獻量 (分數越大，除出來的貢獻量就越低)
-                double contribution = Q / path_score;
+                double distance_ratio = ideal_steps / 20.0;
 
-                // 進行擴散 (維持不變)
+                double normalized_path_score = raw_path_score / distance_ratio;
+
+                double contribution = Q / normalized_path_score;
+
                 for(const auto &p : ant.path){
                     for(int dy = -DIFFUSION_RADIUS; dy <= DIFFUSION_RADIUS; dy++){
                         for(int dx = -DIFFUSION_RADIUS; dx <= DIFFUSION_RADIUS; dx++){
@@ -396,11 +482,20 @@ int main(){
                             if(ny >= 0 && ny < rows && nx >= 0 && nx < cols){
                                 double dist_val = sqrt(dx * dx + dy * dy);
                                 if(dist_val <= DIFFUSION_RADIUS){
-                                    double intensity = 1.0 - (dist_val / (DIFFUSION_RADIUS + 1.0)); // 隨距離遞減 
+                                    double intensity = 1.0 - (dist_val / (DIFFUSION_RADIUS + 1.0));
                                     pheromones[ant.type][ny][nx] += contribution * intensity;
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+        for(int t = 0; t < TYPE_COUNT; t++){
+            for(int y = 0; y < rows; y++){
+                for(int x = 0; x < cols; x++){
+                    if(pheromones[t][y][x] > MAX_PHERO){
+                        pheromones[t][y][x] = MAX_PHERO;
                     }
                 }
             }
