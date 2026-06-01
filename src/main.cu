@@ -7,27 +7,27 @@
 #include <thread>
 #include <mutex>
 #include <fstream>
-#include <filesystem> // 新增：用於建立資料夾
+#include <filesystem> // 用於建立資料夾
 #include <opencv2/opencv.hpp>
 #include <curand_kernel.h>
 
 using namespace std;
 using namespace cv;
-namespace fs = std::filesystem; // 檔案系統命名空間
+namespace fs = std::filesystem;
 
 // --- 演算法基本參數 ---
-const int ANT_COUNT = 40;
+const int ANT_COUNT = 80;
 const double MAX_PHERO = 100.0;
 const int MAX_ITER = 1000;
 const int CELL_SIZE = 25;
 const int MAX_PATH_LEN = 800;
 
-const int DIFFUSION_RADIUS = 2;
+// 移除原有的 const int DIFFUSION_RADIUS = 2; 因為已經變成基因了
 const int MAX_ENDPOINTS = 10;
 const int SAFE_DISTANCE = 3;
 
-const int POP_SIZE = 20;
-const int GA_GENERATIONS = 10;
+const int POP_SIZE = 40;
+const int GA_GENERATIONS = 25;
 
 // --- 視覺化顏色設定 ---
 const Scalar COLOR_BG = Scalar(255, 255, 255);
@@ -49,6 +49,7 @@ struct Chromosome{
     double Q;
     double turn_w;
     double clear_w;
+    double diffusion_rad; // 新增：擴散半徑基因
     double fitness = -1.0;
 };
 
@@ -333,13 +334,14 @@ void ACO_Environment::drawSimulation(int iteration, const Chromosome &dna, int g
     sprintf(info, "GA Gen: %d | Iter: %d | Score: %.1f", gen_num, iteration, (global_best_combined_score == 1e9 ? 0 : global_best_combined_score));
     putText(img, info, Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 0), 2);
 
-    sprintf(info, "A:%.1f B:%.1f r:%.2f Q:%.0f Tw:%.1f Cw:%.1f", dna.alpha, dna.beta, dna.rho, dna.Q, dna.turn_w, dna.clear_w);
+    // --- 修改：在畫面加上 Dr (Diffusion Radius) 顯示 ---
+    sprintf(info, "A:%.1f B:%.1f r:%.2f Q:%.0f Tw:%.1f Cw:%.1f Dr:%d",
+        dna.alpha, dna.beta, dna.rho, dna.Q, dna.turn_w, dna.clear_w, (int) round(dna.diffusion_rad));
     putText(img, info, Point(10, 45), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(50, 50, 50), 1);
 
     imshow("GA-Optimized ACO Routing", img);
     waitKey(1);
 
-    // --- 新增：當視覺化播放到最後一格時，存檔並記錄在 img 資料夾 ---
     if(iteration == MAX_ITER){
         string filename = "img/iter_" + to_string(gen_num) + ".png";
         imwrite(filename, img);
@@ -360,14 +362,15 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
     int blockSize = 256;
     int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
 
-    // 強制統一隨機數種子，保證背景評估與視覺化的分數絕對一致！
     init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, 12345, ANT_COUNT);
     cudaStreamSynchronize(stream);
 
-    // --- 偵錯計數器 ---
     int debug_valid_path_found = 0;
     int debug_stuck_ants_total = 0;
     int debug_step_limit_reached = 0;
+
+    // --- 修改：取得目前基因的擴散半徑 (限制最少為 1 格) ---
+    int diff_rad = max(1, (int) round(dna.diffusion_rad));
 
     for(int iter = 1; iter <= MAX_ITER; iter++){
         for(int i = 0; i < ANT_COUNT; i++){
@@ -544,15 +547,16 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
                     CUDA_Ant &elite_ant = h_ants[best_ant_idx[t][e]];
                     double contribution = (dna.Q / best_score[t][e]) * elite_contribution_weight;
 
+                    // --- 修改：套用擴散半徑基因 ---
                     for(int j = 0; j < elite_ant.path_length; j++){
                         int px = elite_ant.path_x[j], py = elite_ant.path_y[j];
-                        for(int dy = -DIFFUSION_RADIUS; dy <= DIFFUSION_RADIUS; dy++){
-                            for(int dx = -DIFFUSION_RADIUS; dx <= DIFFUSION_RADIUS; dx++){
+                        for(int dy = -diff_rad; dy <= diff_rad; dy++){
+                            for(int dx = -diff_rad; dx <= diff_rad; dx++){
                                 int ny = py + dy, nx = px + dx;
                                 if(ny >= 0 && ny < rows && nx >= 0 && nx < cols && grid_map_cpu[ny][nx] != '1'){
                                     double dist_val = sqrt(dx * dx + dy * dy);
-                                    if(dist_val <= DIFFUSION_RADIUS){
-                                        double intensity = 1.0 - (dist_val / (DIFFUSION_RADIUS + 1.0));
+                                    if(dist_val <= diff_rad){
+                                        double intensity = 1.0 - (dist_val / (diff_rad + 1.0));
                                         pheromones[t][ny][nx] += contribution * intensity;
                                     }
                                 }
@@ -571,15 +575,16 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
                     double gb_score = (global_best_combined_score == 1e9) ? 100.0 : (global_best_combined_score / total_ends);
                     double contribution = (dna.Q / gb_score) * (1.0 - elite_contribution_weight);
 
+                    // --- 修改：套用擴散半徑基因 ---
                     for(int j = 0; j < gb_ant.path_length; j++){
                         int px = gb_ant.path_x[j], py = gb_ant.path_y[j];
-                        for(int dy = -DIFFUSION_RADIUS; dy <= DIFFUSION_RADIUS; dy++){
-                            for(int dx = -DIFFUSION_RADIUS; dx <= DIFFUSION_RADIUS; dx++){
+                        for(int dy = -diff_rad; dy <= diff_rad; dy++){
+                            for(int dx = -diff_rad; dx <= diff_rad; dx++){
                                 int ny = py + dy, nx = px + dx;
                                 if(ny >= 0 && ny < rows && nx >= 0 && nx < cols && grid_map_cpu[ny][nx] != '1'){
                                     double dist_val = sqrt(dx * dx + dy * dy);
-                                    if(dist_val <= DIFFUSION_RADIUS){
-                                        double intensity = 1.0 - (dist_val / (DIFFUSION_RADIUS + 1.0));
+                                    if(dist_val <= diff_rad){
+                                        double intensity = 1.0 - (dist_val / (diff_rad + 1.0));
                                         pheromones[t][ny][nx] += contribution * intensity;
                                     }
                                 }
@@ -639,9 +644,7 @@ int main(){
     srand(time(NULL));
     init_shared_data();
 
-    // --- 自動建立 img 目錄以儲存圖片 ---
     fs::create_directories("img");
-
 
     vector<ACO_Environment *> envs(POP_SIZE);
     for(int i = 0; i < POP_SIZE; i++){
@@ -652,13 +655,13 @@ int main(){
 
     cout << "=== 初始化 GA 族群 ===" << endl;
 
-    // --- 關鍵保底機制：植入已知能產生合法路徑的參數 ---
     population[0].alpha = 1.0;
     population[0].beta = 2.0;
     population[0].rho = 0.1;
     population[0].Q = 100.0;
     population[0].turn_w = 10.0;
     population[0].clear_w = 5.0;
+    population[0].diffusion_rad = 2.0; // --- 修改：保底機制加入半徑基因 ---
 
     for(int i = 1; i < POP_SIZE; i++){
         population[i].alpha = randDouble(0.5, 2.5);
@@ -667,24 +670,23 @@ int main(){
         population[i].Q = randDouble(50.0, 200.0);
         population[i].turn_w = randDouble(1.0, 15.0);
         population[i].clear_w = randDouble(1.0, 10.0);
+        // --- 修改：隨機生成半徑基因，範圍在 1.0 ~ 5.0 之間 ---
+        population[i].diffusion_rad = randDouble(1.0, 5.0);
     }
 
-    // --- 準備 Gnuplot Pipe (清空歷史 Log) ---
     ofstream log_file("ga_log.txt", ios::trunc);
     log_file << "Gen Best Median\n";
     log_file.close();
 
     FILE *gp;
 #ifdef _WIN32
-    gp = _popen("gnuplot", "w"); // 移除 -persist，因為我們改用圖片輸出
+    gp = _popen("gnuplot", "w");
 #else
-    // 只需清空基本路徑，並以背景模式執行
     gp = popen("env -u LD_LIBRARY_PATH gnuplot", "w");
 #endif
 
     if(gp){
-        // --- 核心修改：強制使用 PNG 後端，絕對不開啟任何 GUI 視窗 ---
-        fprintf(gp, "set term pngcairo size 800,400 font 'sans,12'\n"); // 若報錯 pngcairo，可改成 set term png
+        fprintf(gp, "set term pngcairo size 800,400 font 'sans,12'\n");
         fprintf(gp, "set title 'GA Optimization Progress (Best & Median Score)'\n");
         fprintf(gp, "set xlabel 'Generation'\n");
         fprintf(gp, "set ylabel 'Path Score'\n");
@@ -721,30 +723,25 @@ int main(){
         double median_score = population[POP_SIZE / 2].fitness;
         cout << ">> 第 " << gen << " 代最佳適應度: " << best_score << " | 中位數: " << median_score << endl;
 
-        // --- 將成績寫入 Log 並讓 Gnuplot 背景繪圖 ---
         log_file.open("ga_log.txt", ios::app);
         log_file << gen << " " << best_score << " " << median_score << "\n";
         log_file.close();
 
         if(gp){
-            // 指定輸出到 img 資料夾
             fprintf(gp, "set output 'img/ga_progress.png'\n");
             fprintf(gp, "plot 'ga_log.txt' skip 1 using 1:2 with linespoints lw 2 lc rgb 'red' title 'Best Score', \\\n");
             fprintf(gp, "     '' skip 1 using 1:3 with linespoints lw 2 lc rgb 'blue' title 'Median Score'\n");
-            fflush(gp); // 強制執行命令
+            fflush(gp);
 
-            // 給 Gnuplot 一點微小的時間完成圖片寫入
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-            // --- 核心修改：讓 OpenCV 接管折線圖的顯示！ ---
             Mat plot_img = imread("img/ga_progress.png");
             if(!plot_img.empty()){
                 imshow("GA Progress Chart", plot_img);
-                waitKey(1); // 刷新視窗
+                waitKey(1);
             }
         }
 
-        // --- 視覺化播放 ---
         cout << ">> 啟動視覺化：播放第 " << gen << " 代最佳基因之 ACO 搜尋過程..." << endl;
         envs[0]->run_aco(population[0], true, gen);
 
@@ -760,12 +757,16 @@ int main(){
                 population[i].turn_w = (population[p1].turn_w + population[p2].turn_w) / 2.0;
                 population[i].clear_w = (population[p1].clear_w + population[p2].clear_w) / 2.0;
 
+                // --- 修改：加入半徑基因的交配與突變 ---
+                population[i].diffusion_rad = (population[p1].diffusion_rad + population[p2].diffusion_rad) / 2.0;
+
                 if(randDouble(0, 1) < 0.2) population[i].alpha = randDouble(0.5, 2.5);
                 if(randDouble(0, 1) < 0.2) population[i].beta = randDouble(1.5, 5.0);
                 if(randDouble(0, 1) < 0.2) population[i].rho = randDouble(0.01, 0.2);
                 if(randDouble(0, 1) < 0.2) population[i].Q = randDouble(50.0, 200.0);
                 if(randDouble(0, 1) < 0.2) population[i].turn_w = randDouble(1.0, 15.0);
                 if(randDouble(0, 1) < 0.2) population[i].clear_w = randDouble(1.0, 10.0);
+                if(randDouble(0, 1) < 0.2) population[i].diffusion_rad = randDouble(1.0, 5.0);
 
                 population[i].fitness = -1.0;
             }
@@ -785,9 +786,10 @@ int main(){
     cout << "ALPHA: " << population[0].alpha << ", BETA: " << population[0].beta << endl;
     cout << "rho: " << population[0].rho << ", Q: " << population[0].Q << endl;
     cout << "Turn Penalty: " << population[0].turn_w << ", Clearance Penalty: " << population[0].clear_w << endl;
+    // --- 修改：顯示最終的擴散半徑最佳解 ---
+    cout << "Diffusion Radius: " << (int) round(population[0].diffusion_rad) << endl;
     cout << "=========================================" << endl;
 
-    // --- 駐留視窗 ---
     cout << "\n請在顯示的影像視窗中按下任意鍵，以關閉程式..." << endl;
     waitKey(0);
 
