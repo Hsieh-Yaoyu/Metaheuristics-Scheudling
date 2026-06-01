@@ -6,11 +6,14 @@
 #include <algorithm>
 #include <thread>
 #include <mutex>
+#include <fstream>
+#include <filesystem> // 新增：用於建立資料夾
 #include <opencv2/opencv.hpp>
 #include <curand_kernel.h>
 
 using namespace std;
 using namespace cv;
+namespace fs = std::filesystem; // 檔案系統命名空間
 
 // --- 演算法基本參數 ---
 const int ANT_COUNT = 40;
@@ -36,7 +39,7 @@ const Scalar COLOR_ELEC = Scalar(255, 225, 0);
 enum PipeType{ GAS = 0, ELEC = 1 };
 const int TYPE_COUNT = 2;
 
-std::mutex print_mutex; // 確保多執行緒偵錯輸出不會混亂
+std::mutex print_mutex;
 
 // --- 基因結構 (Chromosome) ---
 struct Chromosome{
@@ -107,8 +110,6 @@ __global__ void ant_movement_kernel(
     int rows, int cols, curandState *states,
     double max_phero_cap, double alpha, double beta, int ant_count){
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // 【最致命的修復】防止 GPU 越界存取導致全盤崩潰
     if(id >= ant_count) return;
 
     CUDA_Ant ant = ants[id];
@@ -173,7 +174,6 @@ __global__ void ant_movement_kernel(
         }
         else{
             int chosen_idx = valid_count - 1;
-            // 3% 的微小擾動，幫助跳脫區域最佳解
             if(curand_uniform_double(&local_rand) < 0.03){
                 chosen_idx = (int) (curand_uniform_double(&local_rand) * valid_count);
                 if(chosen_idx >= valid_count) chosen_idx = valid_count - 1;
@@ -338,6 +338,12 @@ void ACO_Environment::drawSimulation(int iteration, const Chromosome &dna, int g
 
     imshow("GA-Optimized ACO Routing", img);
     waitKey(1);
+
+    // --- 新增：當視覺化播放到最後一格時，存檔並記錄在 img 資料夾 ---
+    if(iteration == MAX_ITER){
+        string filename = "img/iter_" + to_string(gen_num) + ".png";
+        imwrite(filename, img);
+    }
 }
 
 double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_num){
@@ -354,7 +360,7 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
     int blockSize = 256;
     int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
 
-
+    // 強制統一隨機數種子，保證背景評估與視覺化的分數絕對一致！
     init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, 12345, ANT_COUNT);
     cudaStreamSynchronize(stream);
 
@@ -417,7 +423,6 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
         cudaMemcpyAsync(h_ants, d_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
 
-        // 收集螞蟻狀態作偵錯
         for(int i = 0; i < ANT_COUNT; i++){
             if(h_ants[i].stuck) debug_stuck_ants_total++;
             if(!h_ants[i].reached_end && !h_ants[i].stuck) debug_step_limit_reached++;
@@ -500,7 +505,6 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
             }
         }
 
-        // --- 核心修正 2：軟性懲罰，將「過近/重疊」轉換為梯度的扣分 ---
         if(all_endpoints_reached){
             int overlap_count = 0;
             for(int ge = 0; ge < end_pos[GAS].size(); ge++){
@@ -519,7 +523,6 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
                 }
             }
 
-            // 只要到達終點，都承認是解，但重疊會極大幅度加分 (適應度變差)
             double evaluated_score = current_combined_score + (overlap_count * 1000.0);
             debug_valid_path_found++;
 
@@ -600,20 +603,12 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
         }
     }
 
-    // ==========================================
-    // === 深度偵錯系統：若發生 1e9 輸出死因報告 ===
-    // ==========================================
     if(!visualize && global_best_combined_score == 1e9){
         std::lock_guard<std::mutex> lock(print_mutex);
         cout << "\n[偵錯] 基因 (Env ID: " << env_id << ") 發生 1e9 錯誤！參數(A:" << dna.alpha << ", B:" << dna.beta << ")" << endl;
         cout << "  - 包含重疊/扣分之成功路徑組合總次數: " << debug_valid_path_found << " / " << MAX_ITER << endl;
         cout << "  - 螞蟻卡死在死胡同總次數: " << debug_stuck_ants_total << endl;
         cout << "  - 螞蟻繞圈用盡 800 步的總次數: " << debug_step_limit_reached << endl;
-        cout << "  -> 診斷結論: ";
-        if(debug_valid_path_found == 0){
-            if(debug_stuck_ants_total > 0) cout << "【困於死胡同】螞蟻參數讓牠容易走入地圖死角卡死。\0" << endl;
-            else cout << "【完全迷路】螞蟻不斷繞圈，直到耗盡了 800 步的壽命，可能 Alpha 過高導致盲從。\0" << endl;
-        }
     }
 
     return global_best_combined_score;
@@ -644,6 +639,8 @@ int main(){
     srand(time(NULL));
     init_shared_data();
 
+    // --- 自動建立 img 目錄以儲存圖片 ---
+    fs::create_directories("img");
 
 
     vector<ACO_Environment *> envs(POP_SIZE);
@@ -655,7 +652,7 @@ int main(){
 
     cout << "=== 初始化 GA 族群 ===" << endl;
 
-    // --- 關鍵保底機制：植入我們已知能產生合法路徑的參數 ---
+    // --- 關鍵保底機制：植入已知能產生合法路徑的參數 ---
     population[0].alpha = 1.0;
     population[0].beta = 2.0;
     population[0].rho = 0.1;
@@ -670,6 +667,28 @@ int main(){
         population[i].Q = randDouble(50.0, 200.0);
         population[i].turn_w = randDouble(1.0, 15.0);
         population[i].clear_w = randDouble(1.0, 10.0);
+    }
+
+    // --- 準備 Gnuplot Pipe (清空歷史 Log) ---
+    ofstream log_file("ga_log.txt", ios::trunc);
+    log_file << "Gen Best Median\n";
+    log_file.close();
+
+    FILE *gp;
+#ifdef _WIN32
+    gp = _popen("gnuplot -persist", "w");
+#else
+    gp = popen("gnuplot -persist", "w");
+#endif
+
+    if(gp){
+        fprintf(gp, "set title 'GA Optimization Progress (Best & Median Score)'\n");
+        fprintf(gp, "set xlabel 'Generation'\n");
+        fprintf(gp, "set ylabel 'Path Score'\n");
+        fprintf(gp, "set grid\n");
+    }
+    else{
+        cout << "[警告] 無法呼叫 Gnuplot。請確定系統已安裝 Gnuplot 並加入環境變數。\0" << endl;
     }
 
     for(int gen = 1; gen <= GA_GENERATIONS; gen++){
@@ -695,8 +714,22 @@ int main(){
             return a.fitness < b.fitness;
         });
 
-        cout << ">> 第 " << gen << " 代最佳適應度: " << population[0].fitness << endl;
+        double best_score = population[0].fitness;
+        double median_score = population[POP_SIZE / 2].fitness;
+        cout << ">> 第 " << gen << " 代最佳適應度: " << best_score << " | 中位數: " << median_score << endl;
 
+        // --- 將成績寫入 Log 並讓 Gnuplot 即時繪製 ---
+        log_file.open("ga_log.txt", ios::app);
+        log_file << gen << " " << best_score << " " << median_score << "\n";
+        log_file.close();
+
+        if(gp){
+            fprintf(gp, "plot 'ga_log.txt' skip 1 using 1:2 with linespoints lw 2 lc rgb 'red' title 'Best Score', \\\n");
+            fprintf(gp, "     '' skip 1 using 1:3 with linespoints lw 2 lc rgb 'blue' title 'Median Score'\n");
+            fflush(gp); // 強制刷新 Gnuplot 緩衝區
+        }
+
+        // --- 視覺化播放 ---
         cout << ">> 啟動視覺化：播放第 " << gen << " 代最佳基因之 ACO 搜尋過程..." << endl;
         envs[0]->run_aco(population[0], true, gen);
 
@@ -724,6 +757,14 @@ int main(){
         }
     }
 
+    if(gp){
+#ifdef _WIN32
+        _pclose(gp);
+#else
+        pclose(gp);
+#endif
+    }
+
     cout << "\n=========================================" << endl;
     cout << "GA 訓練結束！歷史最佳參數組合：" << endl;
     cout << "ALPHA: " << population[0].alpha << ", BETA: " << population[0].beta << endl;
@@ -731,6 +772,7 @@ int main(){
     cout << "Turn Penalty: " << population[0].turn_w << ", Clearance Penalty: " << population[0].clear_w << endl;
     cout << "=========================================" << endl;
 
+    // --- 駐留視窗 ---
     cout << "\n請在顯示的影像視窗中按下任意鍵，以關閉程式..." << endl;
     waitKey(0);
 

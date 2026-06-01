@@ -7,3 +7,4 @@ img*
 *synctex.gz
 build/*
 .vscode
+ga_log.txt
