@@ -1,7 +1,6 @@
 #include <iostream>
 #include <vector>
 #include <string>
-#include <random>
 #include <cmath>
 #include <opencv2/opencv.hpp>
 #include <curand_kernel.h>
@@ -9,23 +8,28 @@
 using namespace std;
 using namespace cv;
 
-// --- 演算法參數 ---
-const double ALPHA = 3.0;
+// --- 演算法參數 (完全保留您的設定) ---
+const double ALPHA = 1.0;
 const double BETA = 2.0;
-const double rho = 0.05;
-const double Q = 2000.0;
-const double se_phero = 80;
+const double rho = 0.1;
+const double Q = 100.0;
+const double turn_penalty_weight = 10.0;
+const double clearance_penalty_weight = 5.0; // 距離過近的嚴厲懲罰倍率
+
+
 const int ANT_COUNT = 40;
-const double MAX_PHERO = 500.0;
-const int MAX_ITER = 20000;
+const double MAX_PHERO = 100.0;
+const int MAX_ITER = 15000;
 const int CELL_SIZE = 25;
 const int MAX_PATH_LEN = 800;
 
-// --- 修改 1：拆分防護罩與路徑擴散的參數 ---
-const int TERMINAL_SHIELD_RADIUS = 2; // 起終點的保護防護罩 (永遠維持不變)
-const int INITIAL_PATH_DIFFUSION = 3; // 螞蟻路徑的初始擴散範圍 (將隨退火遞減至0)
+// 論文中固定的費洛蒙膨脹半徑
+// 論文中固定的費洛蒙膨脹半徑
+const int DIFFUSION_RADIUS = 2;
+const int MAX_ENDPOINTS = 10;
 
-int last_diff = INITIAL_PATH_DIFFUSION;
+// --- 新增：管線之間必須保持的「安全距離」(網格數) ---
+const int SAFE_DISTANCE = 2; // 你可以隨意修改這個值 (例如 1, 2, 3)
 
 // --- 視覺化顏色設定 ---
 const Scalar COLOR_BG = Scalar(255, 255, 255);
@@ -39,24 +43,24 @@ const int TYPE_COUNT = 2;
 
 // --- 多端點地圖定義 ---
 const vector<string> grid_map_cpu = {
-    "00000000000000000g000000",
+    "g00000000000000000000000",
     "000000000000000000000000",
     "001111001111110011110000",
     "001111001111110011110000",
     "00000000000000E000000000",
     "110011111100001111110011",
     "110011111100001111110011",
+    "G00000000000000000000000",
+    "00000000000000000G000000",
     "000000000000000000000000",
-    "000000000000000000000000",
-    "000000000000000000000000",
-    "000000000000000000000000",
+    "E00000000000000000000000",
     "110011111100001111110011",
     "110011111100001111110011",
-    "0000000000G0000000000000",
+    "000000000000000000000000",
     "001111001111110011110000",
     "001111001111110011110000",
     "000000000000000000000000",
-    "e00000000000000000000000"
+    "00000000000e000000000000"
 };
 
 int rows = grid_map_cpu.size();
@@ -72,12 +76,18 @@ struct CUDA_Ant{
     int pos_x, pos_y;
     int last_dir_x, last_dir_y;
     int target_x, target_y;
+    int target_idx; // 新增：記錄這隻螞蟻負責的是該管線的「第幾個」終點
     int path_x[MAX_PATH_LEN];
     int path_y[MAX_PATH_LEN];
     int path_length;
     bool reached_end;
     bool stuck;
 };
+
+// 擴充：支援多終點的「全域最佳解」陣列
+CUDA_Ant global_best_ants[TYPE_COUNT][MAX_ENDPOINTS];
+bool has_global_best[TYPE_COUNT][MAX_ENDPOINTS];
+double global_best_combined_score = 1e9;
 
 // --- GPU 端指標 ---
 char *d_grid_map;
@@ -100,12 +110,8 @@ __global__ void init_rand_kernel(curandState *states, unsigned long seed, int an
 __global__ void ant_movement_kernel(
     CUDA_Ant *ants, bool *visited, double *pheromones, char *grid_map,
     int rows, int cols, curandState *states,
-    int *start_x, int *start_y, int *start_counts,
-    int *end_x, int *end_y, int *end_counts,
-    double max_phero_cap, double alpha, double beta, int shield_radius) // 替換為 shield_radius
-{
+    double max_phero_cap, double alpha, double beta){
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-
     CUDA_Ant ant = ants[id];
     curandState local_rand = states[id];
 
@@ -129,70 +135,30 @@ __global__ void ant_movement_kernel(
             if(nx >= 0 && nx < cols && ny >= 0 && ny < rows){
                 char cell = grid_map[ny * cols + nx];
                 bool is_wall = (cell == '1');
-
                 bool is_other_terminal = false;
                 if(ant.type == 0 && (cell == 'e' || cell == 'E')) is_other_terminal = true;
                 if(ant.type == 1 && (cell == 'g' || cell == 'G')) is_other_terminal = true;
 
-                // Home Zone 檢查 (使用固定的 shield_radius)
-                bool in_home_zone = false;
-                for(int s = 0; s < start_counts[ant.type]; s++){
-                    int sx = start_x[ant.type * 10 + s];
-                    int sy = start_y[ant.type * 10 + s];
-                    if(sqrt(pow((double) (nx - sx), 2) + pow((double) (ny - sy), 2)) <= shield_radius){
-                        in_home_zone = true; break;
-                    }
-                }
-                if(!in_home_zone){
-                    for(int e = 0; e < end_counts[ant.type]; e++){
-                        int ex = end_x[ant.type * 10 + e];
-                        int ey = end_y[ant.type * 10 + e];
-                        if(sqrt(pow((double) (nx - ex), 2) + pow((double) (ny - ey), 2)) <= shield_radius){
-                            in_home_zone = true; break;
-                        }
-                    }
-                }
-
-                bool is_force_field = false;
-                if(!in_home_zone){
-                    for(int t = 0; t < 2; t++){
-                        if(t != ant.type){
-                            double other_p = pheromones[(t * rows + ny) * cols + nx];
-                            double own_p = pheromones[(ant.type * rows + ny) * cols + nx];
-                            if(other_p > max_phero_cap * 0.4 && own_p < 2.0){
-                                is_force_field = true;
-                            }
-                        }
-                    }
-                }
-
-                if(!is_wall && !is_other_terminal && !is_force_field && !visited[visited_offset + ny * cols + nx]){
-                    double gamma = 1.0;
-                    for(int t = 0; t < 2; t++){
-                        if(t != ant.type){
-                            double other_p = pheromones[(t * rows + ny) * cols + nx];
-                            double own_p = pheromones[(ant.type * rows + ny) * cols + nx];
-                            if(other_p > 1.0 && other_p > own_p){
-                                gamma *= exp(-(other_p - own_p) / 10.0);
-                            }
-                        }
-                    }
-                    if(gamma < 0.0001) gamma = 0.0001;
-
-                    double bend_penalty = 1.0;
-                    if(ant.last_dir_x != 0 || ant.last_dir_y != 0){
-                        if(dirs_x[i] != ant.last_dir_x || dirs_y[i] != ant.last_dir_y){
-                            bend_penalty = 0.5;
-                        }
-                    }
-
+                if(!is_wall && !is_other_terminal && !visited[visited_offset + ny * cols + nx]){
                     double own_p = pheromones[(ant.type * rows + ny) * cols + nx];
-                    double perceived_own_p = own_p > 150.0 ? 150.0 : own_p;
+                    double gamma = 1.0;
+
+                    for(int t = 0; t < 2; t++){
+                        if(t != ant.type){
+                            double other_p = pheromones[(t * rows + ny) * cols + nx];
+                            if(other_p > 0.1){
+                                double intensity = fminf(1.0, other_p / max_phero_cap);
+                                int pref = -1;
+                                double modifier = 1.0 + pref * intensity;
+                                if(modifier < 0.01) modifier = 0.01;
+                                gamma *= modifier;
+                            }
+                        }
+                    }
 
                     double dist_target = sqrt(pow((double) (nx - ant.target_x), 2) + pow((double) (ny - ant.target_y), 2));
                     double heuristic = 1.0 / (dist_target + 1.0);
-
-                    double p = pow(perceived_own_p * gamma, alpha) * pow(heuristic * bend_penalty, beta);
+                    double p = pow(own_p * gamma, alpha) * pow(heuristic, beta);
 
                     next_x[valid_count] = nx;
                     next_y[valid_count] = ny;
@@ -207,14 +173,22 @@ __global__ void ant_movement_kernel(
             ant.stuck = true;
         }
         else{
-            double r = curand_uniform_double(&local_rand) * prob_sum;
-            double cumulative = 0.0;
             int chosen_idx = valid_count - 1;
-            for(int i = 0; i < valid_count; i++){
-                cumulative += probs[i];
-                if(cumulative >= r){
-                    chosen_idx = i;
-                    break;
+
+            // 微小擾動 (Epsilon-Greedy)
+            if(curand_uniform_double(&local_rand) < 0.03){
+                chosen_idx = (int) (curand_uniform_double(&local_rand) * valid_count);
+                if(chosen_idx >= valid_count) chosen_idx = valid_count - 1;
+            }
+            else{
+                double r = curand_uniform_double(&local_rand) * prob_sum;
+                double cumulative = 0.0;
+                for(int i = 0; i < valid_count; i++){
+                    cumulative += probs[i];
+                    if(cumulative >= r){
+                        chosen_idx = i;
+                        break;
+                    }
                 }
             }
 
@@ -246,6 +220,9 @@ void init(){
 
     for(int t = 0; t < TYPE_COUNT; t++){
         start_pos[t].clear(); end_pos[t].clear();
+        for(int e = 0; e < MAX_ENDPOINTS; e++){
+            has_global_best[t][e] = false;
+        }
     }
 
     vector<char> flat_grid(rows * cols);
@@ -282,27 +259,6 @@ void init(){
     int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
     init_rand_kernel << <numBlocks, blockSize >> > (d_rand_states, 12345, ANT_COUNT);
     cudaDeviceSynchronize();
-
-    for(int t = 0; t < TYPE_COUNT; t++){
-        vector<Point> all_terminals;
-        all_terminals.insert(all_terminals.end(), start_pos[t].begin(), start_pos[t].end());
-        all_terminals.insert(all_terminals.end(), end_pos[t].begin(), end_pos[t].end());
-
-        for(const auto &p : all_terminals){
-            pheromones[t][p.y][p.x] = se_phero;
-            for(int dy = -TERMINAL_SHIELD_RADIUS; dy <= TERMINAL_SHIELD_RADIUS; dy++){
-                for(int dx = -TERMINAL_SHIELD_RADIUS; dx <= TERMINAL_SHIELD_RADIUS; dx++){
-                    int ny = p.y + dy, nx = p.x + dx;
-                    if(ny >= 0 && ny < rows && nx >= 0 && nx < cols){
-                        double dist_val = sqrt(dx * dx + dy * dy);
-                        if(dist_val <= TERMINAL_SHIELD_RADIUS && dist_val > 0){
-                            pheromones[t][ny][nx] += se_phero / (dist_val + 1.0);
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 void drawSimulation(int iteration){
@@ -347,13 +303,33 @@ void drawSimulation(int iteration){
     }
 
     for(int t = 0; t < TYPE_COUNT; t++){
-        for(int y = 0; y < rows; y++){
-            for(int x = 0; x < cols; x++){
-                if(pheromones[t][y][x] >= actual_max[t] * 0.6){
-                    Rect rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-                    Scalar base_c = (t == GAS) ? COLOR_GAS : COLOR_ELEC;
-                    Scalar outline_c = Scalar(max(0.0, base_c[0] - 120), max(0.0, base_c[1] - 120), max(0.0, base_c[2] - 120));
-                    rectangle(img, rect, outline_c, 2);
+        if(actual_max[t] > 5.0){
+            for(int y = 0; y < rows; y++){
+                for(int x = 0; x < cols; x++){
+                    if(pheromones[t][y][x] >= actual_max[t] * 0.6){
+                        Rect rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                        Scalar base_c = (t == GAS) ? COLOR_GAS : COLOR_ELEC;
+                        Scalar outline_c = Scalar(max(0.0, base_c[0] - 120), max(0.0, base_c[1] - 120), max(0.0, base_c[2] - 120));
+                        rectangle(img, rect, outline_c, 2);
+                    }
+                }
+            }
+        }
+    }
+
+    // 繪製全域最佳解，現在會為每個成功尋獲的終點繪製線條
+    for(int t = 0; t < TYPE_COUNT; t++){
+        for(int e = 0; e < end_pos[t].size(); e++){
+            if(has_global_best[t][e]){
+                Scalar base_c = (t == GAS) ? COLOR_GAS : COLOR_ELEC;
+                Scalar line_c = Scalar(max(0.0, base_c[0] - 140), max(0.0, base_c[1] - 140), max(0.0, base_c[2] - 140));
+
+                for(int j = 0; j < global_best_ants[t][e].path_length - 1; j++){
+                    Point p1(global_best_ants[t][e].path_x[j] * CELL_SIZE + CELL_SIZE / 2,
+                        global_best_ants[t][e].path_y[j] * CELL_SIZE + CELL_SIZE / 2);
+                    Point p2(global_best_ants[t][e].path_x[j + 1] * CELL_SIZE + CELL_SIZE / 2,
+                        global_best_ants[t][e].path_y[j + 1] * CELL_SIZE + CELL_SIZE / 2);
+                    line(img, p1, p2, line_c, 3, LINE_AA);
                 }
             }
         }
@@ -366,14 +342,12 @@ void drawSimulation(int iteration){
     }
 
     putText(img, "Iter: " + to_string(iteration), Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 0), 2);
-    imshow("CUDA ACO Routing", img);
+    imshow("CUDA ACO Routing (Thesis Baseline)", img);
     waitKey(1);
 }
 
 int main(){
     init();
-    mt19937 rng(time(NULL));
-    uniform_real_distribution<double> dist(0.0, 1.0);
 
     CUDA_Ant h_ants[ANT_COUNT];
     vector<double> flat_pheromones(TYPE_COUNT * rows * cols);
@@ -384,21 +358,39 @@ int main(){
     for(int iter = 1; iter <= MAX_ITER; iter++){
         for(int i = 0; i < ANT_COUNT; i++){
             CUDA_Ant ant;
-            if(i % 2 == 0 && !start_pos[GAS].empty()){
+
+            // --- 核心修改 1：利用排列組合，讓起點與終點完美交錯平均分配 ---
+            if(i % 2 == 0 && !start_pos[GAS].empty() && !end_pos[GAS].empty()){
+                int gas_idx = i / 2;
+                int num_starts = start_pos[GAS].size();
+                int num_ends = end_pos[GAS].size();
+
+                int s_idx = (gas_idx / num_ends) % num_starts; // 取商數找起點
+                int e_idx = gas_idx % num_ends;                // 取餘數找終點
+
                 ant.type = GAS;
-                
-                ant.pos_x = start_pos[GAS][(rng()) % start_pos[GAS].size()].x;
-                ant.pos_y = start_pos[GAS][(rng()) % start_pos[GAS].size()].y;
-                ant.target_x = end_pos[GAS][(rng()) % end_pos[GAS].size()].x;
-                ant.target_y = end_pos[GAS][(rng()) % end_pos[GAS].size()].y;
+                ant.pos_x = start_pos[GAS][s_idx].x;
+                ant.pos_y = start_pos[GAS][s_idx].y;
+                ant.target_x = end_pos[GAS][e_idx].x;
+                ant.target_y = end_pos[GAS][e_idx].y;
+                ant.target_idx = e_idx; // 記錄負責的終點
             }
-            else if(!start_pos[ELEC].empty()){
+            else if(!start_pos[ELEC].empty() && !end_pos[ELEC].empty()){
+                int elec_idx = i / 2;
+                int num_starts = start_pos[ELEC].size();
+                int num_ends = end_pos[ELEC].size();
+
+                int s_idx = (elec_idx / num_ends) % num_starts;
+                int e_idx = elec_idx % num_ends;
+
                 ant.type = ELEC;
-                ant.pos_x = start_pos[ELEC][(rng()) % start_pos[ELEC].size()].x;
-                ant.pos_y = start_pos[ELEC][(rng()) % start_pos[ELEC].size()].y;
-                ant.target_x = end_pos[ELEC][(rng()) % end_pos[ELEC].size()].x;
-                ant.target_y = end_pos[ELEC][(rng()) % end_pos[ELEC].size()].y;
+                ant.pos_x = start_pos[ELEC][s_idx].x;
+                ant.pos_y = start_pos[ELEC][s_idx].y;
+                ant.target_x = end_pos[ELEC][e_idx].x;
+                ant.target_y = end_pos[ELEC][e_idx].y;
+                ant.target_idx = e_idx;
             }
+
             ant.last_dir_x = 0; ant.last_dir_y = 0;
             ant.path_x[0] = ant.pos_x; ant.path_y[0] = ant.pos_y;
             ant.path_length = 1;
@@ -422,9 +414,7 @@ int main(){
         ant_movement_kernel << <numBlocks, blockSize >> > (
             d_ants, d_visited, d_pheromones, d_grid_map,
             rows, cols, d_rand_states,
-            d_start_x, d_start_y, d_start_counts,
-            d_end_x, d_end_y, d_end_counts,
-            MAX_PHERO, ALPHA, BETA, TERMINAL_SHIELD_RADIUS
+            MAX_PHERO, ALPHA, BETA
             );
         cudaDeviceSynchronize();
 
@@ -439,37 +429,16 @@ int main(){
             }
         }
 
+        // 建立陣列以記錄「每個」終點在該回合的最佳成績
+        double best_score[TYPE_COUNT][MAX_ENDPOINTS];
+        int best_ant_idx[TYPE_COUNT][MAX_ENDPOINTS];
         for(int t = 0; t < TYPE_COUNT; t++){
-            vector<Point> all_terminals;
-            all_terminals.insert(all_terminals.end(), start_pos[t].begin(), start_pos[t].end());
-            all_terminals.insert(all_terminals.end(), end_pos[t].begin(), end_pos[t].end());
-
-            for(const auto &p : all_terminals){
-                pheromones[t][p.y][p.x] = max(se_phero, pheromones[t][p.y][p.x]);
-                for(int dy = -TERMINAL_SHIELD_RADIUS; dy <= TERMINAL_SHIELD_RADIUS; dy++){
-                    for(int dx = -TERMINAL_SHIELD_RADIUS; dx <= TERMINAL_SHIELD_RADIUS; dx++){
-                        int ny = p.y + dy, nx = p.x + dx;
-                        if(ny >= 0 && ny < rows && nx >= 0 && nx < cols){
-                            double dist_val = sqrt(dx * dx + dy * dy);
-                            if(dist_val <= TERMINAL_SHIELD_RADIUS && dist_val > 0){
-                                double shield_val = se_phero / (dist_val + 1.0);
-                                pheromones[t][ny][nx] = max(pheromones[t][ny][nx], shield_val);
-                            }
-                        }
-                    }
-                }
+            for(int e = 0; e < MAX_ENDPOINTS; e++){
+                best_score[t][e] = 1e9;
+                best_ant_idx[t][e] = -1;
             }
         }
 
-        // --- 修改 2：動態退火計算路徑的擴散半徑 ---
-        // 隨迭代次數線性降溫。前 70% 的時間就會將半徑從 2 降至 0
-        double temperature = 1.0 - min(1.0, (double) iter / (MAX_ITER * 0.7));
-        int current_path_diffusion = round(INITIAL_PATH_DIFFUSION * temperature);
-
-        if(current_path_diffusion != last_diff){
-            printf("Current Diffusion：%d", current_path_diffusion);
-            last_diff = current_path_diffusion;
-        }
         for(int i = 0; i < ANT_COUNT; i++){
             CUDA_Ant &ant = h_ants[i];
             if(ant.reached_end){
@@ -484,45 +453,155 @@ int main(){
                     }
                 }
 
-                double enemy_phero_penalty = 0.0;
+                // --- 修改 1：將單點踩踏懲罰升級為「安全範圍(AoE)掃描懲罰」 ---
+                double clearance_penalty = 0.0;
                 for(int j = 0; j < ant.path_length; j++){
                     int px = ant.path_x[j], py = ant.path_y[j];
                     for(int t = 0; t < TYPE_COUNT; t++){
-                        if(t != ant.type && pheromones[t][py][px] > 1.0){
-                            enemy_phero_penalty += pheromones[t][py][px];
+                        if(t != ant.type){
+                            // 掃描以螞蟻為中心的 SAFE_DISTANCE 範圍
+                            for(int dy = -SAFE_DISTANCE; dy <= SAFE_DISTANCE; dy++){
+                                for(int dx = -SAFE_DISTANCE; dx <= SAFE_DISTANCE; dx++){
+                                    int ny = py + dy, nx = px + dx;
+                                    if(ny >= 0 && ny < rows && nx >= 0 && nx < cols){
+                                        double dist = sqrt(dx * dx + dy * dy);
+
+                                        if(dist <= SAFE_DISTANCE){
+                                            // 如果該格子有敵方的實體軌跡或防護罩
+                                            if(pheromones[t][ny][nx] > 1.0){
+                                                // 距離越近，嚴重程度(severity)越高，懲罰分數暴增
+                                                double severity = (SAFE_DISTANCE - dist + 1.0);
+                                                clearance_penalty += pheromones[t][ny][nx] * severity;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                const double turn_penalty_weight = 2.0;
-                const double enemy_penalty_weight = 3.0;
 
-                double ideal_steps = 15 + abs(ant.path_x[0] - ant.target_x) + abs(ant.path_y[0] - ant.target_y);
-                if(ideal_steps < 1.0) ideal_steps = 1.0;
+                // 綜合路徑成本：長度 + 轉彎懲罰 + 安全距離懲罰
+                double path_score = ant.path_length +
+                    (turn_count * turn_penalty_weight) +
+                    (clearance_penalty * clearance_penalty_weight);
+                
+                // 針對這隻螞蟻負責的終點進行成績登記
+                if(path_score < best_score[ant.type][ant.target_idx]){
+                    best_score[ant.type][ant.target_idx] = path_score;
+                    best_ant_idx[ant.type][ant.target_idx] = i;
+                }
+            }
+        }
 
-                double raw_path_score = ant.path_length * 5.0 + (turn_count * turn_penalty_weight) + (enemy_phero_penalty * enemy_penalty_weight);
-                double distance_ratio = ideal_steps / 20.0;
-                double normalized_path_score = raw_path_score / distance_ratio;
-                double contribution = Q / pow(normalized_path_score, 1.5);
+        // --- 核心修改 2：聯合評估所有終點是否發生重疊 ---
+        bool all_endpoints_reached = true;
+        double current_combined_score = 0.0;
 
-                // --- 修改 3：套用退火後的動態擴散半徑 ---
-                for(int j = 0; j < ant.path_length; j++){
-                    int px = ant.path_x[j], py = ant.path_y[j];
+        for(int t = 0; t < TYPE_COUNT; t++){
+            for(int e = 0; e < end_pos[t].size(); e++){
+                if(best_ant_idx[t][e] == -1){
+                    all_endpoints_reached = false;
+                }
+                else{
+                    current_combined_score += best_score[t][e];
+                }
+            }
+        }
 
-                    // 使用 current_path_diffusion 來限制暈染範圍
-                    for(int dy = -current_path_diffusion; dy <= current_path_diffusion; dy++){
-                        for(int dx = -current_path_diffusion; dx <= current_path_diffusion; dx++){
-                            int ny = py + dy, nx = px + dx;
-                            if(ny >= 0 && ny < rows && nx >= 0 && nx < cols && grid_map_cpu[ny][nx] != '1'){
-                                double dist_val = sqrt(dx * dx + dy * dy);
+        // 如果本回合「所有起終點的組合」都順利抵達，才進行嚴格的重疊檢查
+        // --- 修改 2：全域最佳解審查升級，距離過近直接判定為衝突 ---
+        if(all_endpoints_reached){
+            bool is_overlapping = false;
 
-                                if(dist_val <= current_path_diffusion){
-                                    // 確保當 diffusion 退火到 0 時，自身這格獲得 100% (1.0) 的費洛蒙釋放
-                                    double intensity = 1.0;
-                                    if(current_path_diffusion > 0){
-                                        intensity = 1.0 - (dist_val / (current_path_diffusion + 1.0));
+            // 掃描任何一條瓦斯路徑，是否與任何一條電管路徑距離過近
+            for(int ge = 0; ge < end_pos[GAS].size(); ge++){
+                CUDA_Ant &gas_ant = h_ants[best_ant_idx[GAS][ge]];
+                for(int ee = 0; ee < end_pos[ELEC].size(); ee++){
+                    CUDA_Ant &elec_ant = h_ants[best_ant_idx[ELEC][ee]];
+
+                    for(int j = 0; j < gas_ant.path_length; j++){
+                        for(int k = 0; k < elec_ant.path_length; k++){
+
+                            // 計算兩條管線節點之間的幾何距離
+                            double dist = sqrt(pow((double) (gas_ant.path_x[j] - elec_ant.path_x[k]), 2) +
+                                pow((double) (gas_ant.path_y[j] - elec_ant.path_y[k]), 2));
+
+                            // 若小於等於安全距離，即視為無效組合 (拒絕更新為全域最佳)
+                            if(dist <= SAFE_DISTANCE){
+                                is_overlapping = true;
+                                break;
+                            }
+                        }
+                        if(is_overlapping) break;
+                    }
+                    if(is_overlapping) break;
+                }
+                if(is_overlapping) break;
+            }
+
+            // 如果保持完美安全距離且總分更低，覆寫歷史最佳紀錄
+            if(!is_overlapping && current_combined_score < global_best_combined_score){
+                global_best_combined_score = current_combined_score;
+                for(int t = 0; t < TYPE_COUNT; t++){
+                    for(int e = 0; e < end_pos[t].size(); e++){
+                        global_best_ants[t][e] = h_ants[best_ant_idx[t][e]];
+                        has_global_best[t][e] = true;
+                    }
+                }
+            }
+        }
+
+        // 1. 本回合菁英螞蟻釋放 (探索力：30%)
+
+        const double elite_contribution_weight = 0.5;
+
+        for(int t = 0; t < TYPE_COUNT; t++){
+            for(int e = 0; e < end_pos[t].size(); e++){
+                if(best_ant_idx[t][e] != -1){
+                    CUDA_Ant &elite_ant = h_ants[best_ant_idx[t][e]];
+                    double contribution = (Q / best_score[t][e]) * elite_contribution_weight;
+
+                    for(int j = 0; j < elite_ant.path_length; j++){
+                        int px = elite_ant.path_x[j], py = elite_ant.path_y[j];
+                        for(int dy = -DIFFUSION_RADIUS; dy <= DIFFUSION_RADIUS; dy++){
+                            for(int dx = -DIFFUSION_RADIUS; dx <= DIFFUSION_RADIUS; dx++){
+                                int ny = py + dy, nx = px + dx;
+                                if(ny >= 0 && ny < rows && nx >= 0 && nx < cols && grid_map_cpu[ny][nx] != '1'){
+                                    double dist_val = sqrt(dx * dx + dy * dy);
+                                    if(dist_val <= DIFFUSION_RADIUS){
+                                        double intensity = 1.0 - (dist_val / (DIFFUSION_RADIUS + 1.0));
+                                        pheromones[t][ny][nx] += contribution * intensity;
                                     }
-                                    pheromones[ant.type][ny][nx] += contribution * intensity;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. 全域歷史最佳螞蟻釋放 (收斂力：70%)
+        for(int t = 0; t < TYPE_COUNT; t++){
+            for(int e = 0; e < end_pos[t].size(); e++){
+                if(has_global_best[t][e]){
+                    CUDA_Ant &gb_ant = global_best_ants[t][e];
+                    double total_ends = end_pos[GAS].size() + end_pos[ELEC].size();
+                    double gb_score = (global_best_combined_score == 1e9) ? 100.0 : (global_best_combined_score / total_ends);
+                    double contribution = (Q / gb_score) * (1.0 - elite_contribution_weight);
+
+                    for(int j = 0; j < gb_ant.path_length; j++){
+                        int px = gb_ant.path_x[j], py = gb_ant.path_y[j];
+                        for(int dy = -DIFFUSION_RADIUS; dy <= DIFFUSION_RADIUS; dy++){
+                            for(int dx = -DIFFUSION_RADIUS; dx <= DIFFUSION_RADIUS; dx++){
+                                int ny = py + dy, nx = px + dx;
+                                if(ny >= 0 && ny < rows && nx >= 0 && nx < cols && grid_map_cpu[ny][nx] != '1'){
+                                    double dist_val = sqrt(dx * dx + dy * dy);
+                                    if(dist_val <= DIFFUSION_RADIUS){
+                                        double intensity = 1.0 - (dist_val / (DIFFUSION_RADIUS + 1.0));
+                                        pheromones[t][ny][nx] += contribution * intensity;
+                                    }
                                 }
                             }
                         }
@@ -545,6 +624,7 @@ int main(){
     }
 
     cout << "Simulation Finished." << endl;
+    drawSimulation(MAX_ITER);
     waitKey(0);
     return 0;
 }
