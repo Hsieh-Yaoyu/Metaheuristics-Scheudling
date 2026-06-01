@@ -676,19 +676,22 @@ int main(){
 
     FILE *gp;
 #ifdef _WIN32
-    gp = _popen("gnuplot -persist", "w");
+    gp = _popen("gnuplot", "w"); // 移除 -persist，因為我們改用圖片輸出
 #else
-    gp = popen("gnuplot -persist", "w");
+    // 只需清空基本路徑，並以背景模式執行
+    gp = popen("env -u LD_LIBRARY_PATH gnuplot", "w");
 #endif
 
     if(gp){
+        // --- 核心修改：強制使用 PNG 後端，絕對不開啟任何 GUI 視窗 ---
+        fprintf(gp, "set term pngcairo size 800,400 font 'sans,12'\n"); // 若報錯 pngcairo，可改成 set term png
         fprintf(gp, "set title 'GA Optimization Progress (Best & Median Score)'\n");
         fprintf(gp, "set xlabel 'Generation'\n");
         fprintf(gp, "set ylabel 'Path Score'\n");
         fprintf(gp, "set grid\n");
     }
     else{
-        cout << "[警告] 無法呼叫 Gnuplot。請確定系統已安裝 Gnuplot 並加入環境變數。\0" << endl;
+        cout << "[警告] 無法呼叫 Gnuplot。\0" << endl;
     }
 
     for(int gen = 1; gen <= GA_GENERATIONS; gen++){
@@ -718,15 +721,27 @@ int main(){
         double median_score = population[POP_SIZE / 2].fitness;
         cout << ">> 第 " << gen << " 代最佳適應度: " << best_score << " | 中位數: " << median_score << endl;
 
-        // --- 將成績寫入 Log 並讓 Gnuplot 即時繪製 ---
+        // --- 將成績寫入 Log 並讓 Gnuplot 背景繪圖 ---
         log_file.open("ga_log.txt", ios::app);
         log_file << gen << " " << best_score << " " << median_score << "\n";
         log_file.close();
 
         if(gp){
+            // 指定輸出到 img 資料夾
+            fprintf(gp, "set output 'img/ga_progress.png'\n");
             fprintf(gp, "plot 'ga_log.txt' skip 1 using 1:2 with linespoints lw 2 lc rgb 'red' title 'Best Score', \\\n");
             fprintf(gp, "     '' skip 1 using 1:3 with linespoints lw 2 lc rgb 'blue' title 'Median Score'\n");
-            fflush(gp); // 強制刷新 Gnuplot 緩衝區
+            fflush(gp); // 強制執行命令
+
+            // 給 Gnuplot 一點微小的時間完成圖片寫入
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            // --- 核心修改：讓 OpenCV 接管折線圖的顯示！ ---
+            Mat plot_img = imread("img/ga_progress.png");
+            if(!plot_img.empty()){
+                imshow("GA Progress Chart", plot_img);
+                waitKey(1); // 刷新視窗
+            }
         }
 
         // --- 視覺化播放 ---
