@@ -2,34 +2,29 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <ctime>
+#include <algorithm>
+#include <thread>
+#include <mutex>
 #include <opencv2/opencv.hpp>
 #include <curand_kernel.h>
 
 using namespace std;
 using namespace cv;
 
-// --- 演算法參數 (完全保留您的設定) ---
-const double ALPHA = 1.0;
-const double BETA = 2.0;
-const double rho = 0.1;
-const double Q = 100.0;
-const double turn_penalty_weight = 10.0;
-const double clearance_penalty_weight = 5.0; // 距離過近的嚴厲懲罰倍率
-
-
+// --- 演算法基本參數 ---
 const int ANT_COUNT = 40;
 const double MAX_PHERO = 100.0;
-const int MAX_ITER = 15000;
+const int MAX_ITER = 1000;
 const int CELL_SIZE = 25;
 const int MAX_PATH_LEN = 800;
 
-// 論文中固定的費洛蒙膨脹半徑
-// 論文中固定的費洛蒙膨脹半徑
 const int DIFFUSION_RADIUS = 2;
 const int MAX_ENDPOINTS = 10;
+const int SAFE_DISTANCE = 3;
 
-// --- 新增：管線之間必須保持的「安全距離」(網格數) ---
-const int SAFE_DISTANCE = 2; // 你可以隨意修改這個值 (例如 1, 2, 3)
+const int POP_SIZE = 20;
+const int GA_GENERATIONS = 10;
 
 // --- 視覺化顏色設定 ---
 const Scalar COLOR_BG = Scalar(255, 255, 255);
@@ -41,7 +36,24 @@ const Scalar COLOR_ELEC = Scalar(255, 225, 0);
 enum PipeType{ GAS = 0, ELEC = 1 };
 const int TYPE_COUNT = 2;
 
-// --- 多端點地圖定義 ---
+std::mutex print_mutex; // 確保多執行緒偵錯輸出不會混亂
+
+// --- 基因結構 (Chromosome) ---
+struct Chromosome{
+    double alpha;
+    double beta;
+    double rho;
+    double Q;
+    double turn_w;
+    double clear_w;
+    double fitness = -1.0;
+};
+
+double randDouble(double minVal, double maxVal){
+    return minVal + (double) rand() / RAND_MAX * (maxVal - minVal);
+}
+
+// --- 多端點地圖定義 (全域唯讀共用) ---
 const vector<string> grid_map_cpu = {
     "g00000000000000000000000",
     "000000000000000000000000",
@@ -66,38 +78,21 @@ const vector<string> grid_map_cpu = {
 int rows = grid_map_cpu.size();
 int cols = grid_map_cpu[0].size();
 
-// --- CPU 資料結構 ---
 vector<Point> start_pos[TYPE_COUNT], end_pos[TYPE_COUNT];
-vector<vector<vector<double>>> pheromones;
+char *d_grid_map_shared;
 
-// --- GPU 專用螞蟻結構 ---
 struct CUDA_Ant{
     int type;
     int pos_x, pos_y;
     int last_dir_x, last_dir_y;
     int target_x, target_y;
-    int target_idx; // 新增：記錄這隻螞蟻負責的是該管線的「第幾個」終點
+    int target_idx;
     int path_x[MAX_PATH_LEN];
     int path_y[MAX_PATH_LEN];
     int path_length;
     bool reached_end;
     bool stuck;
 };
-
-// 擴充：支援多終點的「全域最佳解」陣列
-CUDA_Ant global_best_ants[TYPE_COUNT][MAX_ENDPOINTS];
-bool has_global_best[TYPE_COUNT][MAX_ENDPOINTS];
-double global_best_combined_score = 1e9;
-
-// --- GPU 端指標 ---
-char *d_grid_map;
-double *d_pheromones;
-bool *d_visited;
-CUDA_Ant *d_ants;
-curandState *d_rand_states;
-
-int *d_start_x; int *d_start_y; int *d_start_counts;
-int *d_end_x;   int *d_end_y;   int *d_end_counts;
 
 // --- CUDA Kernels ---
 __global__ void init_rand_kernel(curandState *states, unsigned long seed, int ant_count){
@@ -110,8 +105,12 @@ __global__ void init_rand_kernel(curandState *states, unsigned long seed, int an
 __global__ void ant_movement_kernel(
     CUDA_Ant *ants, bool *visited, double *pheromones, char *grid_map,
     int rows, int cols, curandState *states,
-    double max_phero_cap, double alpha, double beta){
+    double max_phero_cap, double alpha, double beta, int ant_count){
     int id = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // 【最致命的修復】防止 GPU 越界存取導致全盤崩潰
+    if(id >= ant_count) return;
+
     CUDA_Ant ant = ants[id];
     curandState local_rand = states[id];
 
@@ -174,8 +173,7 @@ __global__ void ant_movement_kernel(
         }
         else{
             int chosen_idx = valid_count - 1;
-
-            // 微小擾動 (Epsilon-Greedy)
+            // 3% 的微小擾動，幫助跳脫區域最佳解
             if(curand_uniform_double(&local_rand) < 0.03){
                 chosen_idx = (int) (curand_uniform_double(&local_rand) * valid_count);
                 if(chosen_idx >= valid_count) chosen_idx = valid_count - 1;
@@ -208,60 +206,54 @@ __global__ void ant_movement_kernel(
             }
         }
     }
-
     ants[id] = ant;
     states[id] = local_rand;
 }
 
+// =====================================================================
+// === 封裝：平行化環境類別 (每個基因擁有獨立的 GPU Stream 與記憶體) ===
+// =====================================================================
+class ACO_Environment{
+public:
+    int env_id;
+    cudaStream_t stream;
 
-// --- Host 函式 ---
-void init(){
-    pheromones.assign(TYPE_COUNT, vector<vector<double>>(rows, vector<double>(cols, 0.1)));
+    vector<vector<vector<double>>> pheromones;
+    CUDA_Ant global_best_ants[TYPE_COUNT][MAX_ENDPOINTS];
+    bool has_global_best[TYPE_COUNT][MAX_ENDPOINTS];
+    double global_best_combined_score;
 
-    for(int t = 0; t < TYPE_COUNT; t++){
-        start_pos[t].clear(); end_pos[t].clear();
-        for(int e = 0; e < MAX_ENDPOINTS; e++){
-            has_global_best[t][e] = false;
-        }
+    double *d_pheromones;
+    bool *d_visited;
+    CUDA_Ant *d_ants;
+    curandState *d_rand_states;
+
+    ACO_Environment(int id, unsigned long seed) : env_id(id){
+        cudaStreamCreate(&stream);
+        cudaMalloc(&d_pheromones, TYPE_COUNT * rows * cols * sizeof(double));
+        cudaMalloc(&d_visited, ANT_COUNT * rows * cols * sizeof(bool));
+        cudaMalloc(&d_ants, ANT_COUNT * sizeof(CUDA_Ant));
+        cudaMalloc(&d_rand_states, ANT_COUNT * sizeof(curandState));
+
+        int blockSize = 256;
+        int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
+        init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, seed, ANT_COUNT);
+        cudaStreamSynchronize(stream);
     }
 
-    vector<char> flat_grid(rows * cols);
-    int h_start_x[TYPE_COUNT * 10] = { 0 }, h_start_y[TYPE_COUNT * 10] = { 0 }, h_start_counts[TYPE_COUNT] = { 0 };
-    int h_end_x[TYPE_COUNT * 10] = { 0 }, h_end_y[TYPE_COUNT * 10] = { 0 }, h_end_counts[TYPE_COUNT] = { 0 };
-
-    for(int y = 0; y < rows; y++){
-        for(int x = 0; x < cols; x++){
-            flat_grid[y * cols + x] = grid_map_cpu[y][x];
-            if(grid_map_cpu[y][x] == 'g'){ h_start_x[GAS * 10 + h_start_counts[GAS]] = x; h_start_y[GAS * 10 + h_start_counts[GAS]++] = y; start_pos[GAS].push_back(Point(x, y)); }
-            if(grid_map_cpu[y][x] == 'G'){ h_end_x[GAS * 10 + h_end_counts[GAS]] = x;     h_end_y[GAS * 10 + h_end_counts[GAS]++] = y;     end_pos[GAS].push_back(Point(x, y)); }
-            if(grid_map_cpu[y][x] == 'e'){ h_start_x[ELEC * 10 + h_start_counts[ELEC]] = x; h_start_y[ELEC * 10 + h_start_counts[ELEC]++] = y; start_pos[ELEC].push_back(Point(x, y)); }
-            if(grid_map_cpu[y][x] == 'E'){ h_end_x[ELEC * 10 + h_end_counts[ELEC]] = x;     h_end_y[ELEC * 10 + h_end_counts[ELEC]++] = y;     end_pos[ELEC].push_back(Point(x, y)); }
-        }
+    ~ACO_Environment(){
+        cudaFree(d_pheromones);
+        cudaFree(d_visited);
+        cudaFree(d_ants);
+        cudaFree(d_rand_states);
+        cudaStreamDestroy(stream);
     }
 
-    cudaMalloc(&d_grid_map, rows * cols * sizeof(char));
-    cudaMemcpy(d_grid_map, flat_grid.data(), rows * cols * sizeof(char), cudaMemcpyHostToDevice);
+    void drawSimulation(int iteration, const Chromosome &dna, int gen_num);
+    double run_aco(const Chromosome &dna, bool visualize, int gen_num);
+};
 
-    cudaMalloc(&d_start_x, TYPE_COUNT * 10 * sizeof(int)); cudaMemcpy(d_start_x, h_start_x, TYPE_COUNT * 10 * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMalloc(&d_start_y, TYPE_COUNT * 10 * sizeof(int)); cudaMemcpy(d_start_y, h_start_y, TYPE_COUNT * 10 * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMalloc(&d_start_counts, TYPE_COUNT * sizeof(int)); cudaMemcpy(d_start_counts, h_start_counts, TYPE_COUNT * sizeof(int), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_end_x, TYPE_COUNT * 10 * sizeof(int)); cudaMemcpy(d_end_x, h_end_x, TYPE_COUNT * 10 * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMalloc(&d_end_y, TYPE_COUNT * 10 * sizeof(int)); cudaMemcpy(d_end_y, h_end_y, TYPE_COUNT * 10 * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMalloc(&d_end_counts, TYPE_COUNT * sizeof(int)); cudaMemcpy(d_end_counts, h_end_counts, TYPE_COUNT * sizeof(int), cudaMemcpyHostToDevice);
-
-    cudaMalloc(&d_pheromones, TYPE_COUNT * rows * cols * sizeof(double));
-    cudaMalloc(&d_visited, ANT_COUNT * rows * cols * sizeof(bool));
-    cudaMalloc(&d_ants, ANT_COUNT * sizeof(CUDA_Ant));
-    cudaMalloc(&d_rand_states, ANT_COUNT * sizeof(curandState));
-
-    int blockSize = 256;
-    int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
-    init_rand_kernel << <numBlocks, blockSize >> > (d_rand_states, 12345, ANT_COUNT);
-    cudaDeviceSynchronize();
-}
-
-void drawSimulation(int iteration){
+void ACO_Environment::drawSimulation(int iteration, const Chromosome &dna, int gen_num){
     Mat img(rows * CELL_SIZE, cols * CELL_SIZE, CV_8UC3, COLOR_BG);
     double display_max[TYPE_COUNT] = { 0.1, 0.1 };
     double actual_max[TYPE_COUNT] = { 0.1, 0.1 };
@@ -269,9 +261,7 @@ void drawSimulation(int iteration){
     for(int t = 0; t < TYPE_COUNT; t++){
         for(int y = 0; y < rows; y++){
             for(int x = 0; x < cols; x++){
-                if(pheromones[t][y][x] > actual_max[t]){
-                    actual_max[t] = pheromones[t][y][x];
-                }
+                if(pheromones[t][y][x] > actual_max[t]) actual_max[t] = pheromones[t][y][x];
             }
         }
         display_max[t] = min(actual_max[t], 100.0);
@@ -317,13 +307,11 @@ void drawSimulation(int iteration){
         }
     }
 
-    // 繪製全域最佳解，現在會為每個成功尋獲的終點繪製線條
     for(int t = 0; t < TYPE_COUNT; t++){
         for(int e = 0; e < end_pos[t].size(); e++){
             if(has_global_best[t][e]){
                 Scalar base_c = (t == GAS) ? COLOR_GAS : COLOR_ELEC;
                 Scalar line_c = Scalar(max(0.0, base_c[0] - 140), max(0.0, base_c[1] - 140), max(0.0, base_c[2] - 140));
-
                 for(int j = 0; j < global_best_ants[t][e].path_length - 1; j++){
                     Point p1(global_best_ants[t][e].path_x[j] * CELL_SIZE + CELL_SIZE / 2,
                         global_best_ants[t][e].path_y[j] * CELL_SIZE + CELL_SIZE / 2);
@@ -341,56 +329,65 @@ void drawSimulation(int iteration){
         for(const auto &ep : end_pos[t]) rectangle(img, Rect(ep.x * CELL_SIZE, ep.y * CELL_SIZE, CELL_SIZE, CELL_SIZE), c, 2);
     }
 
-    putText(img, "Iter: " + to_string(iteration), Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 0), 2);
-    imshow("CUDA ACO Routing (Thesis Baseline)", img);
+    char info[256];
+    sprintf(info, "GA Gen: %d | Iter: %d | Score: %.1f", gen_num, iteration, (global_best_combined_score == 1e9 ? 0 : global_best_combined_score));
+    putText(img, info, Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 0), 2);
+
+    sprintf(info, "A:%.1f B:%.1f r:%.2f Q:%.0f Tw:%.1f Cw:%.1f", dna.alpha, dna.beta, dna.rho, dna.Q, dna.turn_w, dna.clear_w);
+    putText(img, info, Point(10, 45), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(50, 50, 50), 1);
+
+    imshow("GA-Optimized ACO Routing", img);
     waitKey(1);
 }
 
-int main(){
-    init();
+double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_num){
+    pheromones.assign(TYPE_COUNT, vector<vector<double>>(rows, vector<double>(cols, 0.1)));
+    global_best_combined_score = 1e9;
+    for(int t = 0; t < TYPE_COUNT; t++){
+        for(int e = 0; e < MAX_ENDPOINTS; e++){
+            has_global_best[t][e] = false;
+        }
+    }
 
     CUDA_Ant h_ants[ANT_COUNT];
     vector<double> flat_pheromones(TYPE_COUNT * rows * cols);
-
     int blockSize = 256;
     int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
+
+
+    init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, 12345, ANT_COUNT);
+    cudaStreamSynchronize(stream);
+
+    // --- 偵錯計數器 ---
+    int debug_valid_path_found = 0;
+    int debug_stuck_ants_total = 0;
+    int debug_step_limit_reached = 0;
 
     for(int iter = 1; iter <= MAX_ITER; iter++){
         for(int i = 0; i < ANT_COUNT; i++){
             CUDA_Ant ant;
-
-            // --- 核心修改 1：利用排列組合，讓起點與終點完美交錯平均分配 ---
             if(i % 2 == 0 && !start_pos[GAS].empty() && !end_pos[GAS].empty()){
                 int gas_idx = i / 2;
                 int num_starts = start_pos[GAS].size();
                 int num_ends = end_pos[GAS].size();
-
-                int s_idx = (gas_idx / num_ends) % num_starts; // 取商數找起點
-                int e_idx = gas_idx % num_ends;                // 取餘數找終點
-
+                int s_idx = (gas_idx / num_ends) % num_starts;
+                int e_idx = gas_idx % num_ends;
                 ant.type = GAS;
-                ant.pos_x = start_pos[GAS][s_idx].x;
-                ant.pos_y = start_pos[GAS][s_idx].y;
-                ant.target_x = end_pos[GAS][e_idx].x;
-                ant.target_y = end_pos[GAS][e_idx].y;
-                ant.target_idx = e_idx; // 記錄負責的終點
+                ant.pos_x = start_pos[GAS][s_idx].x; ant.pos_y = start_pos[GAS][s_idx].y;
+                ant.target_x = end_pos[GAS][e_idx].x; ant.target_y = end_pos[GAS][e_idx].y;
+                ant.target_idx = e_idx;
             }
             else if(!start_pos[ELEC].empty() && !end_pos[ELEC].empty()){
                 int elec_idx = i / 2;
                 int num_starts = start_pos[ELEC].size();
                 int num_ends = end_pos[ELEC].size();
-
                 int s_idx = (elec_idx / num_ends) % num_starts;
                 int e_idx = elec_idx % num_ends;
-
                 ant.type = ELEC;
-                ant.pos_x = start_pos[ELEC][s_idx].x;
-                ant.pos_y = start_pos[ELEC][s_idx].y;
-                ant.target_x = end_pos[ELEC][e_idx].x;
-                ant.target_y = end_pos[ELEC][e_idx].y;
+                ant.pos_x = start_pos[ELEC][s_idx].x; ant.pos_y = start_pos[ELEC][s_idx].y;
+                ant.target_x = end_pos[ELEC][e_idx].x; ant.target_y = end_pos[ELEC][e_idx].y;
                 ant.target_idx = e_idx;
             }
-
             ant.last_dir_x = 0; ant.last_dir_y = 0;
             ant.path_x[0] = ant.pos_x; ant.path_y[0] = ant.pos_y;
             ant.path_length = 1;
@@ -407,29 +404,34 @@ int main(){
             }
         }
 
-        cudaMemcpy(d_ants, h_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_pheromones, flat_pheromones.data(), TYPE_COUNT * rows * cols * sizeof(double), cudaMemcpyHostToDevice);
-        cudaMemset(d_visited, 0, ANT_COUNT * rows * cols * sizeof(bool));
+        cudaMemcpyAsync(d_ants, h_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_pheromones, flat_pheromones.data(), TYPE_COUNT * rows * cols * sizeof(double), cudaMemcpyHostToDevice, stream);
+        cudaMemsetAsync(d_visited, 0, ANT_COUNT * rows * cols * sizeof(bool), stream);
 
-        ant_movement_kernel << <numBlocks, blockSize >> > (
-            d_ants, d_visited, d_pheromones, d_grid_map,
+        ant_movement_kernel << <numBlocks, blockSize, 0, stream >> > (
+            d_ants, d_visited, d_pheromones, d_grid_map_shared,
             rows, cols, d_rand_states,
-            MAX_PHERO, ALPHA, BETA
+            MAX_PHERO, dna.alpha, dna.beta, ANT_COUNT
             );
-        cudaDeviceSynchronize();
 
-        cudaMemcpy(h_ants, d_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(h_ants, d_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+
+        // 收集螞蟻狀態作偵錯
+        for(int i = 0; i < ANT_COUNT; i++){
+            if(h_ants[i].stuck) debug_stuck_ants_total++;
+            if(!h_ants[i].reached_end && !h_ants[i].stuck) debug_step_limit_reached++;
+        }
 
         for(int t = 0; t < TYPE_COUNT; t++){
             for(int y = 0; y < rows; y++){
                 for(int x = 0; x < cols; x++){
-                    pheromones[t][y][x] *= (1.0 - rho);
+                    pheromones[t][y][x] *= (1.0 - dna.rho);
                     if(pheromones[t][y][x] < 0.1) pheromones[t][y][x] = 0.1;
                 }
             }
         }
 
-        // 建立陣列以記錄「每個」終點在該回合的最佳成績
         double best_score[TYPE_COUNT][MAX_ENDPOINTS];
         int best_ant_idx[TYPE_COUNT][MAX_ENDPOINTS];
         for(int t = 0; t < TYPE_COUNT; t++){
@@ -453,23 +455,18 @@ int main(){
                     }
                 }
 
-                // --- 修改 1：將單點踩踏懲罰升級為「安全範圍(AoE)掃描懲罰」 ---
                 double clearance_penalty = 0.0;
                 for(int j = 0; j < ant.path_length; j++){
                     int px = ant.path_x[j], py = ant.path_y[j];
                     for(int t = 0; t < TYPE_COUNT; t++){
                         if(t != ant.type){
-                            // 掃描以螞蟻為中心的 SAFE_DISTANCE 範圍
                             for(int dy = -SAFE_DISTANCE; dy <= SAFE_DISTANCE; dy++){
                                 for(int dx = -SAFE_DISTANCE; dx <= SAFE_DISTANCE; dx++){
                                     int ny = py + dy, nx = px + dx;
                                     if(ny >= 0 && ny < rows && nx >= 0 && nx < cols){
                                         double dist = sqrt(dx * dx + dy * dy);
-
                                         if(dist <= SAFE_DISTANCE){
-                                            // 如果該格子有敵方的實體軌跡或防護罩
                                             if(pheromones[t][ny][nx] > 1.0){
-                                                // 距離越近，嚴重程度(severity)越高，懲罰分數暴增
                                                 double severity = (SAFE_DISTANCE - dist + 1.0);
                                                 clearance_penalty += pheromones[t][ny][nx] * severity;
                                             }
@@ -481,13 +478,8 @@ int main(){
                     }
                 }
 
+                double path_score = ant.path_length + (turn_count * dna.turn_w) + (clearance_penalty * dna.clear_w);
 
-                // 綜合路徑成本：長度 + 轉彎懲罰 + 安全距離懲罰
-                double path_score = ant.path_length +
-                    (turn_count * turn_penalty_weight) +
-                    (clearance_penalty * clearance_penalty_weight);
-                
-                // 針對這隻螞蟻負責的終點進行成績登記
                 if(path_score < best_score[ant.type][ant.target_idx]){
                     best_score[ant.type][ant.target_idx] = path_score;
                     best_ant_idx[ant.type][ant.target_idx] = i;
@@ -495,10 +487,8 @@ int main(){
             }
         }
 
-        // --- 核心修改 2：聯合評估所有終點是否發生重疊 ---
         bool all_endpoints_reached = true;
         double current_combined_score = 0.0;
-
         for(int t = 0; t < TYPE_COUNT; t++){
             for(int e = 0; e < end_pos[t].size(); e++){
                 if(best_ant_idx[t][e] == -1){
@@ -510,40 +500,31 @@ int main(){
             }
         }
 
-        // 如果本回合「所有起終點的組合」都順利抵達，才進行嚴格的重疊檢查
-        // --- 修改 2：全域最佳解審查升級，距離過近直接判定為衝突 ---
+        // --- 核心修正 2：軟性懲罰，將「過近/重疊」轉換為梯度的扣分 ---
         if(all_endpoints_reached){
-            bool is_overlapping = false;
-
-            // 掃描任何一條瓦斯路徑，是否與任何一條電管路徑距離過近
+            int overlap_count = 0;
             for(int ge = 0; ge < end_pos[GAS].size(); ge++){
                 CUDA_Ant &gas_ant = h_ants[best_ant_idx[GAS][ge]];
                 for(int ee = 0; ee < end_pos[ELEC].size(); ee++){
                     CUDA_Ant &elec_ant = h_ants[best_ant_idx[ELEC][ee]];
-
                     for(int j = 0; j < gas_ant.path_length; j++){
                         for(int k = 0; k < elec_ant.path_length; k++){
-
-                            // 計算兩條管線節點之間的幾何距離
                             double dist = sqrt(pow((double) (gas_ant.path_x[j] - elec_ant.path_x[k]), 2) +
                                 pow((double) (gas_ant.path_y[j] - elec_ant.path_y[k]), 2));
-
-                            // 若小於等於安全距離，即視為無效組合 (拒絕更新為全域最佳)
                             if(dist <= SAFE_DISTANCE){
-                                is_overlapping = true;
-                                break;
+                                overlap_count++;
                             }
                         }
-                        if(is_overlapping) break;
                     }
-                    if(is_overlapping) break;
                 }
-                if(is_overlapping) break;
             }
 
-            // 如果保持完美安全距離且總分更低，覆寫歷史最佳紀錄
-            if(!is_overlapping && current_combined_score < global_best_combined_score){
-                global_best_combined_score = current_combined_score;
+            // 只要到達終點，都承認是解，但重疊會極大幅度加分 (適應度變差)
+            double evaluated_score = current_combined_score + (overlap_count * 1000.0);
+            debug_valid_path_found++;
+
+            if(evaluated_score < global_best_combined_score){
+                global_best_combined_score = evaluated_score;
                 for(int t = 0; t < TYPE_COUNT; t++){
                     for(int e = 0; e < end_pos[t].size(); e++){
                         global_best_ants[t][e] = h_ants[best_ant_idx[t][e]];
@@ -553,15 +534,12 @@ int main(){
             }
         }
 
-        // 1. 本回合菁英螞蟻釋放 (探索力：30%)
-
-        const double elite_contribution_weight = 0.5;
-
+        double elite_contribution_weight = 0.5;
         for(int t = 0; t < TYPE_COUNT; t++){
             for(int e = 0; e < end_pos[t].size(); e++){
                 if(best_ant_idx[t][e] != -1){
                     CUDA_Ant &elite_ant = h_ants[best_ant_idx[t][e]];
-                    double contribution = (Q / best_score[t][e]) * elite_contribution_weight;
+                    double contribution = (dna.Q / best_score[t][e]) * elite_contribution_weight;
 
                     for(int j = 0; j < elite_ant.path_length; j++){
                         int px = elite_ant.path_x[j], py = elite_ant.path_y[j];
@@ -582,14 +560,13 @@ int main(){
             }
         }
 
-        // 2. 全域歷史最佳螞蟻釋放 (收斂力：70%)
         for(int t = 0; t < TYPE_COUNT; t++){
             for(int e = 0; e < end_pos[t].size(); e++){
                 if(has_global_best[t][e]){
                     CUDA_Ant &gb_ant = global_best_ants[t][e];
                     double total_ends = end_pos[GAS].size() + end_pos[ELEC].size();
                     double gb_score = (global_best_combined_score == 1e9) ? 100.0 : (global_best_combined_score / total_ends);
-                    double contribution = (Q / gb_score) * (1.0 - elite_contribution_weight);
+                    double contribution = (dna.Q / gb_score) * (1.0 - elite_contribution_weight);
 
                     for(int j = 0; j < gb_ant.path_length; j++){
                         int px = gb_ant.path_x[j], py = gb_ant.path_y[j];
@@ -613,18 +590,152 @@ int main(){
         for(int t = 0; t < TYPE_COUNT; t++){
             for(int y = 0; y < rows; y++){
                 for(int x = 0; x < cols; x++){
-                    if(pheromones[t][y][x] > MAX_PHERO){
-                        pheromones[t][y][x] = MAX_PHERO;
-                    }
+                    if(pheromones[t][y][x] > MAX_PHERO) pheromones[t][y][x] = MAX_PHERO;
                 }
             }
         }
 
-        drawSimulation(iter);
+        if(visualize && (iter % 100 == 0 || iter == MAX_ITER)){
+            drawSimulation(iter, dna, gen_num);
+        }
     }
 
-    cout << "Simulation Finished." << endl;
-    drawSimulation(MAX_ITER);
+    // ==========================================
+    // === 深度偵錯系統：若發生 1e9 輸出死因報告 ===
+    // ==========================================
+    if(!visualize && global_best_combined_score == 1e9){
+        std::lock_guard<std::mutex> lock(print_mutex);
+        cout << "\n[偵錯] 基因 (Env ID: " << env_id << ") 發生 1e9 錯誤！參數(A:" << dna.alpha << ", B:" << dna.beta << ")" << endl;
+        cout << "  - 包含重疊/扣分之成功路徑組合總次數: " << debug_valid_path_found << " / " << MAX_ITER << endl;
+        cout << "  - 螞蟻卡死在死胡同總次數: " << debug_stuck_ants_total << endl;
+        cout << "  - 螞蟻繞圈用盡 800 步的總次數: " << debug_step_limit_reached << endl;
+        cout << "  -> 診斷結論: ";
+        if(debug_valid_path_found == 0){
+            if(debug_stuck_ants_total > 0) cout << "【困於死胡同】螞蟻參數讓牠容易走入地圖死角卡死。\0" << endl;
+            else cout << "【完全迷路】螞蟻不斷繞圈，直到耗盡了 800 步的壽命，可能 Alpha 過高導致盲從。\0" << endl;
+        }
+    }
+
+    return global_best_combined_score;
+}
+
+void init_shared_data(){
+    for(int t = 0; t < TYPE_COUNT; t++){
+        start_pos[t].clear(); end_pos[t].clear();
+    }
+    vector<char> flat_grid(rows * cols);
+    for(int y = 0; y < rows; y++){
+        for(int x = 0; x < cols; x++){
+            flat_grid[y * cols + x] = grid_map_cpu[y][x];
+            if(grid_map_cpu[y][x] == 'g') start_pos[GAS].push_back(Point(x, y));
+            if(grid_map_cpu[y][x] == 'G') end_pos[GAS].push_back(Point(x, y));
+            if(grid_map_cpu[y][x] == 'e') start_pos[ELEC].push_back(Point(x, y));
+            if(grid_map_cpu[y][x] == 'E') end_pos[ELEC].push_back(Point(x, y));
+        }
+    }
+    cudaMalloc(&d_grid_map_shared, rows * cols * sizeof(char));
+    cudaMemcpy(d_grid_map_shared, flat_grid.data(), rows * cols * sizeof(char), cudaMemcpyHostToDevice);
+}
+
+// ===========================================
+// === 主程式：執行多執行緒基因演算法 (GA) ===
+// ===========================================
+int main(){
+    srand(time(NULL));
+    init_shared_data();
+
+
+
+    vector<ACO_Environment *> envs(POP_SIZE);
+    for(int i = 0; i < POP_SIZE; i++){
+        envs[i] = new ACO_Environment(i, time(NULL) + i);
+    }
+
+    vector<Chromosome> population(POP_SIZE);
+
+    cout << "=== 初始化 GA 族群 ===" << endl;
+
+    // --- 關鍵保底機制：植入我們已知能產生合法路徑的參數 ---
+    population[0].alpha = 1.0;
+    population[0].beta = 2.0;
+    population[0].rho = 0.1;
+    population[0].Q = 100.0;
+    population[0].turn_w = 10.0;
+    population[0].clear_w = 5.0;
+
+    for(int i = 1; i < POP_SIZE; i++){
+        population[i].alpha = randDouble(0.5, 2.5);
+        population[i].beta = randDouble(1.5, 5.0);
+        population[i].rho = randDouble(0.01, 0.2);
+        population[i].Q = randDouble(50.0, 200.0);
+        population[i].turn_w = randDouble(1.0, 15.0);
+        population[i].clear_w = randDouble(1.0, 10.0);
+    }
+
+    for(int gen = 1; gen <= GA_GENERATIONS; gen++){
+        cout << "\n[ 世代 " << gen << " / " << GA_GENERATIONS << " 開始 GPU 平行運算評估 ]" << endl;
+
+        vector<thread> workers;
+        for(int i = 0; i < POP_SIZE; i++){
+            if(population[i].fitness < 0){
+                workers.emplace_back([&, i](){
+                    population[i].fitness = envs[i]->run_aco(population[i], false, gen);
+                });
+            }
+            else{
+                cout << "  保留菁英個體 " << i << " (成績: " << population[i].fitness << ")" << endl;
+            }
+        }
+
+        for(auto &w : workers){
+            w.join();
+        }
+
+        sort(population.begin(), population.end(), [](const Chromosome &a, const Chromosome &b){
+            return a.fitness < b.fitness;
+        });
+
+        cout << ">> 第 " << gen << " 代最佳適應度: " << population[0].fitness << endl;
+
+        cout << ">> 啟動視覺化：播放第 " << gen << " 代最佳基因之 ACO 搜尋過程..." << endl;
+        envs[0]->run_aco(population[0], true, gen);
+
+        if(gen < GA_GENERATIONS){
+            for(int i = POP_SIZE / 2; i < POP_SIZE; i++){
+                int p1 = rand() % (POP_SIZE / 2);
+                int p2 = rand() % (POP_SIZE / 2);
+
+                population[i].alpha = (population[p1].alpha + population[p2].alpha) / 2.0;
+                population[i].beta = (population[p1].beta + population[p2].beta) / 2.0;
+                population[i].rho = (population[p1].rho + population[p2].rho) / 2.0;
+                population[i].Q = (population[p1].Q + population[p2].Q) / 2.0;
+                population[i].turn_w = (population[p1].turn_w + population[p2].turn_w) / 2.0;
+                population[i].clear_w = (population[p1].clear_w + population[p2].clear_w) / 2.0;
+
+                if(randDouble(0, 1) < 0.2) population[i].alpha = randDouble(0.5, 2.5);
+                if(randDouble(0, 1) < 0.2) population[i].beta = randDouble(1.5, 5.0);
+                if(randDouble(0, 1) < 0.2) population[i].rho = randDouble(0.01, 0.2);
+                if(randDouble(0, 1) < 0.2) population[i].Q = randDouble(50.0, 200.0);
+                if(randDouble(0, 1) < 0.2) population[i].turn_w = randDouble(1.0, 15.0);
+                if(randDouble(0, 1) < 0.2) population[i].clear_w = randDouble(1.0, 10.0);
+
+                population[i].fitness = -1.0;
+            }
+        }
+    }
+
+    cout << "\n=========================================" << endl;
+    cout << "GA 訓練結束！歷史最佳參數組合：" << endl;
+    cout << "ALPHA: " << population[0].alpha << ", BETA: " << population[0].beta << endl;
+    cout << "rho: " << population[0].rho << ", Q: " << population[0].Q << endl;
+    cout << "Turn Penalty: " << population[0].turn_w << ", Clearance Penalty: " << population[0].clear_w << endl;
+    cout << "=========================================" << endl;
+
+    cout << "\n請在顯示的影像視窗中按下任意鍵，以關閉程式..." << endl;
     waitKey(0);
+
+    for(int i = 0; i < POP_SIZE; i++) delete envs[i];
+    cudaFree(d_grid_map_shared);
+
     return 0;
 }
