@@ -69,7 +69,7 @@ const vector<string> grid_map_cpu = {
     "G00000000000000000000000",
     "00000000000000000G000000",
     "000000000000000000000000",
-    "E00000000000000000000000",
+    "00000G000000000000000000",
     "110011111100001111110011",
     "110011111100001111110011",
     "000000000000000000000000",
@@ -349,6 +349,7 @@ void ACO_Environment::drawSimulation(int iteration, const Chromosome &dna, int g
 }
 
 double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_num){
+    
     pheromones.assign(TYPE_COUNT, vector<vector<double>>(rows, vector<double>(cols, 0.1)));
     global_best_combined_score = 1e9;
     for(int t = 0; t < TYPE_COUNT; t++){
@@ -356,22 +357,23 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
             has_global_best[t][e] = false;
         }
     }
-
+    
     CUDA_Ant h_ants[ANT_COUNT];
     vector<double> flat_pheromones(TYPE_COUNT * rows * cols);
     int blockSize = 256;
     int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
-
+    
     init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, 12345, ANT_COUNT);
     cudaStreamSynchronize(stream);
-
+    
     int debug_valid_path_found = 0;
     int debug_stuck_ants_total = 0;
     int debug_step_limit_reached = 0;
-
+    
     // --- 修改：取得目前基因的擴散半徑 (限制最少為 1 格) ---
     int diff_rad = max(1, (int) round(dna.diffusion_rad));
-
+    
+    auto start_time = chrono::high_resolution_clock::now();
     for(int iter = 1; iter <= MAX_ITER; iter++){
         for(int i = 0; i < ANT_COUNT; i++){
             CUDA_Ant ant;
@@ -425,6 +427,8 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
 
         cudaMemcpyAsync(h_ants, d_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
+
+
 
         for(int i = 0; i < ANT_COUNT; i++){
             if(h_ants[i].stuck) debug_stuck_ants_total++;
@@ -607,6 +611,9 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
             drawSimulation(iter, dna, gen_num);
         }
     }
+    auto end_time = chrono::high_resolution_clock::now();
+    double elapsed_sec = chrono::duration<double>(end_time - start_time).count();
+    // std::cout << "  - GPU 評估完成，耗時: " << elapsed_sec << " 秒" << std::endl;
 
     if(!visualize && global_best_combined_score == 1e9){
         std::lock_guard<std::mutex> lock(print_mutex);
@@ -711,9 +718,14 @@ int main(){
             }
         }
 
+        //計算工作執行緒完成所需的時間
+        auto start_time = chrono::high_resolution_clock::now();
         for(auto &w : workers){
             w.join();
         }
+        auto end_time = chrono::high_resolution_clock::now();
+        auto duration = chrono::duration_cast<chrono::seconds>(end_time - start_time).count();
+        cout << ">> GPU 評估完成！耗時: " << duration << " 秒\0" << endl;
 
         sort(population.begin(), population.end(), [](const Chromosome &a, const Chromosome &b){
             return a.fitness < b.fitness;
