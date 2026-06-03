@@ -8,3 +8,4 @@ img*
 build/*
 .vscode
 ga_log.txt
+data/map*/

@@ -28,15 +28,18 @@ file(GLOB ALL_SOURCES CONFIGURE_DEPENDS
 list(REMOVE_ITEM ALL_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main_ga.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main_aco.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main_batch.cpp"
 )
 
 # 定義兩個獨立的執行檔
 set(EXEC_GA "GA_Optimizer")
 set(EXEC_ACO "ACO_Runner")
+set(EXEC_BATCH "Batch_Runner")
 
 # 分別將專屬的 main 程式與共用的原始碼綁定
 add_executable(${EXEC_GA} src/main_ga.cpp ${ALL_SOURCES})
 add_executable(${EXEC_ACO} src/main_aco.cpp ${ALL_SOURCES})
+add_executable(${EXEC_BATCH} src/main_batch.cpp ${ALL_SOURCES})
 
 # ==========================================
 # 3. 系統環境判定提示 (只印出一次)
@@ -54,7 +57,7 @@ endif()
 # ==========================================
 # 4. 統一套用編譯屬性至所有執行檔
 # ==========================================
-set(MY_EXECUTABLES ${EXEC_GA} ${EXEC_ACO})
+set(MY_EXECUTABLES ${EXEC_GA} ${EXEC_ACO} ${EXEC_BATCH})
 
 foreach(EXEC IN LISTS MY_EXECUTABLES)
     # 系統環境 Macro 綁定
@@ -110,5 +113,11 @@ foreach(EXEC IN LISTS MY_EXECUTABLES)
         ${OpenCV_LIBS}
         OpenMP::OpenMP_CXX
         CUDA::cudart
+    )
+    add_custom_command(TARGET ${EXEC} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+        "${CMAKE_CURRENT_SOURCE_DIR}/data"
+        "$<TARGET_FILE_DIR:${EXEC}>/data"
+        COMMENT "Creating symlink for data directory to build directory."
     )
 endforeach()

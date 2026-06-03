@@ -13,14 +13,27 @@ double randDouble(double minVal, double maxVal){
     return minVal + (double) rand() / RAND_MAX * (maxVal - minVal);
 }
 
-int main(){
+// 支援透過指令列接收地圖檔案參數
+int main(int argc, char *argv[]){
+
+    string map_filename = "data/map.txt";
+    if(argc > 1){
+        map_filename = argv[1]; // 若有輸入則替換
+    }
+
     srand(time(NULL));
-    init_shared_data();
+
+    // 將檔案路徑傳入初始化
+    cout << ">> 載入地圖: " << map_filename << endl;
+    init_shared_data(map_filename);
+
     fs::create_directories("img");
 
+    // 以下程式碼完全不變...
     vector<ACO_Environment *> envs(POP_SIZE);
     for(int i = 0; i < POP_SIZE; i++) envs[i] = new ACO_Environment(i, time(NULL) + i);
 
+    // ... 下方的 GA 迴圈與 Gnuplot 呼叫皆無需改動，與前一版完全相同 ...
     vector<Chromosome> population(POP_SIZE);
     cout << "=== 初始化 GA 族群 ===" << endl;
 

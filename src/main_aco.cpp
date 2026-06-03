@@ -10,6 +10,7 @@ namespace fs = std::filesystem;
 
 int main(int argc, char *argv[]){
     Chromosome dna;
+    string map_filename = "data/map.txt";
 
     // 檢查是否有透過指令列輸入參數
     if(argc >= 8){
@@ -20,23 +21,25 @@ int main(int argc, char *argv[]){
         dna.turn_w = stod(argv[5]);
         dna.clear_w = stod(argv[6]);
         dna.diffusion_rad = stod(argv[7]);
+
+        if(argc >= 9) map_filename = argv[8]; // 允許第8個參數為地圖路徑
+
         cout << ">> 載入自訂參數測試模式..." << endl;
     }
     else{
-        cout << "使用方法: ./ACO_Runner <alpha> <beta> <rho> <Q> <turn_w> <clear_w> <diff_rad>" << endl;
+        cout << "使用方法: ./ACO_Runner <alpha> <beta> <rho> <Q> <turn_w> <clear_w> <diff_rad> [map_path]" << endl;
         cout << ">> 未偵測到輸入，使用預設保底參數測試模式..." << endl;
         dna = { 1.0, 2.0, 0.1, 100.0, 10.0, 5.0, 2.0, -1.0 };
     }
 
-    init_shared_data();
+    cout << ">> 載入地圖: " << map_filename << endl;
+    init_shared_data(map_filename);
+
     fs::create_directories("img");
 
-    // 建立單一環境
+    // 以下程式碼完全不變...
     ACO_Environment env(0, time(NULL));
-
     cout << "開始執行 ACO 模擬 (MAX_ITER: " << MAX_ITER << ")..." << endl;
-
-    // 開啟視覺化模式 (gen_num 傳入 0 作為標記)
     double final_score = env.run_aco(dna, true, 0);
 
     cout << "=========================================" << endl;
