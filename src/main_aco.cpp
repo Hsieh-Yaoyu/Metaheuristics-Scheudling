@@ -39,14 +39,36 @@ int main(int argc, char *argv[]){
 
     // 以下程式碼完全不變...
     ACO_Environment env(0, time(NULL));
-    cout << "開始執行 ACO 模擬 (MAX_ITER: " << MAX_ITER << ")..." << endl;
-    double final_score = env.run_aco(dna, true, 0);
 
     cout << "=========================================" << endl;
-    cout << "模擬結束！最終取得的適應度 (Score): " << final_score << endl;
+    cout << ">> 1. 啟動 CPU 多核心運算測試 (MAX_ITER: " << MAX_ITER << ")..." << endl;
+    auto start_cpu = chrono::high_resolution_clock::now();
+
+    // 傳入 false 代表使用 CPU
+    double cpu_score = env.run_aco(dna, false, 0, false);
+
+    auto end_cpu = chrono::high_resolution_clock::now();
+    double cpu_time = chrono::duration<double>(end_cpu - start_cpu).count();
+    cout << "   - CPU 耗時: " << cpu_time << " 秒 (得分: " << cpu_score << ")" << endl;
+
+
+    cout << "\n>> 2. 啟動 GPU CUDA 運算測試 (MAX_ITER: " << MAX_ITER << ")..." << endl;
+    auto start_gpu = chrono::high_resolution_clock::now();
+
+    // 傳入 true 代表使用 GPU
+    double gpu_score = env.run_aco(dna, false, 0, true);
+
+    auto end_gpu = chrono::high_resolution_clock::now();
+    double gpu_time = chrono::duration<double>(end_gpu - start_gpu).count();
+    cout << "   - GPU 耗時: " << gpu_time << " 秒 (得分: " << gpu_score << ")" << endl;
     cout << "=========================================" << endl;
 
-    cout << "\n請在顯示的影像視窗中按下任意鍵，以關閉程式..." << endl;
+    // 計算加速比
+    cout << "💡 結論：GPU 比 CPU 快了 " << (cpu_time / gpu_time) << " 倍！" << endl;
+
+    // (選用) 最後用 GPU 跑一次並顯示視覺化畫面
+    cout << "\n>> 啟動視覺化..." << endl;
+    env.run_aco(dna, true, 0, true);
     waitKey(0);
 
     free_shared_data();

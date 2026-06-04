@@ -2,6 +2,8 @@
 #include "config.h"
 #include <curand_kernel.h>
 
+// 在 aco_env.cuh 中修改 run_aco 的宣告
+
 class ACO_Environment{
 public:
     int env_id;
@@ -21,5 +23,6 @@ public:
     ~ACO_Environment();
 
     void drawSimulation(int iteration, const Chromosome &dna, int gen_num);
-    double run_aco(const Chromosome &dna, bool visualize, int gen_num);
+    double run_aco(const Chromosome &dna, bool visualize, int gen_num, bool use_gpu = true);
+    // double run_aco(const Chromosome &dna, bool visualize, int gen_num);
 };

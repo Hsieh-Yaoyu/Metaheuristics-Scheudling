@@ -5,6 +5,114 @@
 
 static std::mutex print_mutex;
 
+#include <random>
+#include <omp.h>
+
+// 修改：接收外部的亂數生成器陣列 cpu_gens
+void cpu_ant_movement(
+    CUDA_Ant *ants, bool *visited, const double *pheromones, const vector<string> &grid_map,
+    int rows, int cols, double max_phero_cap, double alpha, double beta, int ant_count,
+    std::vector<std::mt19937> &cpu_gens) // <-- 新增這個參數
+{
+#pragma omp parallel for
+    for(int id = 0; id < ant_count; id++){
+        CUDA_Ant ant = ants[id];
+
+        // 每一隻螞蟻使用自己專屬且保留歷史狀態的亂數生成器
+        std::uniform_real_distribution<double> dis(0.0, 1.0);
+
+        int visited_offset = id * rows * cols;
+        visited[visited_offset + ant.pos_y * cols + ant.pos_x] = true;
+
+        int dirs_x[4] = { 0, 0, -1, 1 };
+        int dirs_y[4] = { -1, 1, 0, 0 };
+
+        while(!ant.reached_end && !ant.stuck && ant.path_length < MAX_PATH_LEN - 1){
+            int next_x[4], next_y[4];
+            double probs[4];
+            double prob_sum = 0.0;
+            int valid_count = 0;
+
+            for(int i = 0; i < 4; i++){
+                int nx = ant.pos_x + dirs_x[i];
+                int ny = ant.pos_y + dirs_y[i];
+
+                if(nx >= 0 && nx < cols && ny >= 0 && ny < rows){
+                    char cell = grid_map[ny][nx];
+                    bool is_wall = (cell == '1');
+                    bool is_other_terminal = false;
+                    if(ant.type == 0 && (cell == 'e' || cell == 'E')) is_other_terminal = true;
+                    if(ant.type == 1 && (cell == 'g' || cell == 'G')) is_other_terminal = true;
+
+                    if(!is_wall && !is_other_terminal && !visited[visited_offset + ny * cols + nx]){
+                        double own_p = pheromones[(ant.type * rows + ny) * cols + nx];
+                        double gamma = 1.0;
+
+                        for(int t = 0; t < 2; t++){
+                            if(t != ant.type){
+                                double other_p = pheromones[(t * rows + ny) * cols + nx];
+                                if(other_p > 0.1){
+                                    double intensity = fminf(1.0, other_p / max_phero_cap);
+                                    double modifier = 1.0 - 1.0 * intensity;
+                                    if(modifier < 0.01) modifier = 0.01;
+                                    gamma *= modifier;
+                                }
+                            }
+                        }
+
+                        double dist_target = sqrt(pow((double) (nx - ant.target_x), 2) + pow((double) (ny - ant.target_y), 2));
+                        double heuristic = 1.0 / (dist_target + 1.0);
+                        double p = pow(own_p * gamma, alpha) * pow(heuristic, beta);
+
+                        next_x[valid_count] = nx;
+                        next_y[valid_count] = ny;
+                        probs[valid_count] = p;
+                        prob_sum += p;
+                        valid_count++;
+                    }
+                }
+            }
+
+            if(valid_count == 0){
+                ant.stuck = true;
+            }
+            else{
+                int chosen_idx = valid_count - 1;
+                // 改用傳入的 cpu_gens[id]
+                if(dis(cpu_gens[id]) < 0.03){
+                    chosen_idx = (int) (dis(cpu_gens[id]) * valid_count);
+                    if(chosen_idx >= valid_count) chosen_idx = valid_count - 1;
+                }
+                else{
+                    double r = dis(cpu_gens[id]) * prob_sum;
+                    double cumulative = 0.0;
+                    for(int i = 0; i < valid_count; i++){
+                        cumulative += probs[i];
+                        if(cumulative >= r){
+                            chosen_idx = i;
+                            break;
+                        }
+                    }
+                }
+
+                ant.last_dir_x = next_x[chosen_idx] - ant.pos_x;
+                ant.last_dir_y = next_y[chosen_idx] - ant.pos_y;
+                ant.pos_x = next_x[chosen_idx];
+                ant.pos_y = next_y[chosen_idx];
+                ant.path_x[ant.path_length] = ant.pos_x;
+                ant.path_y[ant.path_length] = ant.pos_y;
+                ant.path_length++;
+
+                visited[visited_offset + ant.pos_y * cols + ant.pos_x] = true;
+                if(ant.pos_x == ant.target_x && ant.pos_y == ant.target_y){
+                    ant.reached_end = true;
+                }
+            }
+        }
+        ants[id] = ant;
+    }
+}
+
 ACO_Environment::ACO_Environment(int id, unsigned long seed) : env_id(id){
     cudaStreamCreate(&stream);
     cudaMalloc(&d_pheromones, TYPE_COUNT * rows * cols * sizeof(double));
@@ -120,7 +228,7 @@ void ACO_Environment::drawSimulation(int iteration, const Chromosome &dna, int g
     }
 }
 
-double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_num){
+double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_num, bool use_gpu){
 
     pheromones.assign(TYPE_COUNT, vector<vector<double>>(rows, vector<double>(cols, 0.1)));
     global_best_combined_score = 1e9;
@@ -130,13 +238,18 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
         }
     }
 
-    CUDA_Ant h_ants[ANT_COUNT];
+    std::vector<CUDA_Ant> h_ants(ANT_COUNT);
     vector<double> flat_pheromones(TYPE_COUNT * rows * cols);
     int blockSize = 256;
     int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
 
     init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, 12345, ANT_COUNT);
     cudaStreamSynchronize(stream);
+
+    std::vector<std::mt19937> cpu_gens(ANT_COUNT);
+    for(int i = 0; i < ANT_COUNT; i++){
+        cpu_gens[i] = std::mt19937(12345 + env_id * 100 + i);
+    }
 
     int debug_valid_path_found = 0;
     int debug_stuck_ants_total = 0;
@@ -147,6 +260,8 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
 
     auto start_time = chrono::high_resolution_clock::now();
     for(int iter = 1; iter <= MAX_ITER; iter++){
+        // printf("\r[Env ID: %d] Iteration %d/%d - Valid Paths: %d - Stuck Ants: %d - Step Limit Reached: %d",
+        //     env_id, iter, MAX_ITER, debug_valid_path_found, debug_stuck_ants_total, debug_step_limit_reached);
         for(int i = 0; i < ANT_COUNT; i++){
             CUDA_Ant ant;
             if(i % 2 == 0 && !start_pos[GAS].empty() && !end_pos[GAS].empty()){
@@ -187,18 +302,28 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
             }
         }
 
-        cudaMemcpyAsync(d_ants, h_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_pheromones, flat_pheromones.data(), TYPE_COUNT * rows * cols * sizeof(double), cudaMemcpyHostToDevice, stream);
-        cudaMemsetAsync(d_visited, 0, ANT_COUNT * rows * cols * sizeof(bool), stream);
+        if(use_gpu){
+            cudaMemcpyAsync(d_ants, h_ants.data(), ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(d_pheromones, flat_pheromones.data(), TYPE_COUNT * rows * cols * sizeof(double), cudaMemcpyHostToDevice, stream);
+            cudaMemsetAsync(d_visited, 0, ANT_COUNT * rows * cols * sizeof(bool), stream);
 
-        ant_movement_kernel << <numBlocks, blockSize, 0, stream >> > (
-            d_ants, d_visited, d_pheromones, d_grid_map_shared,
-            rows, cols, d_rand_states,
-            MAX_PHERO, dna.alpha, dna.beta, ANT_COUNT
-            );
+            ant_movement_kernel << <numBlocks, blockSize, 0, stream >> > (
+                d_ants, d_visited, d_pheromones, d_grid_map_shared,
+                rows, cols, d_rand_states, MAX_PHERO, dna.alpha, dna.beta, ANT_COUNT
+                );
 
-        cudaMemcpyAsync(h_ants, d_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
+            cudaMemcpyAsync(h_ants.data(), d_ants, ANT_COUNT * sizeof(CUDA_Ant), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
+        }
+        else{
+            // 使用 CPU 運算 (免去記憶體傳輸開銷)
+            bool *cpu_visited = new bool[ANT_COUNT * rows * cols]();
+            
+            cpu_ant_movement(h_ants.data(), cpu_visited, flat_pheromones.data(), grid_map_cpu,
+                rows, cols, MAX_PHERO, dna.alpha, dna.beta, ANT_COUNT, cpu_gens);
+
+            delete[] cpu_visited; // 使用完畢後記得釋放記憶體
+        }
 
 
 

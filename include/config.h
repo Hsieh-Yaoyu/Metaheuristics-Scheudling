@@ -7,7 +7,7 @@ using namespace std;
 using namespace cv;
 
 // --- 演算法基本參數 ---
-const int ANT_COUNT = 80;
+const int ANT_COUNT = 2000;
 const double MAX_PHERO = 100.0;
 const int MAX_ITER = 1000;
 const int CELL_SIZE = 25;

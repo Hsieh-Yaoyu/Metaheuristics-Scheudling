@@ -62,6 +62,25 @@ Taipei, Taiwan(R.O.C) \\
 （如費洛蒙權重 $\alpha$、啟發式權重 $\beta$ 等）的設定，
 參數選擇不當極易導致演算法陷入局部最佳解或收斂過於緩慢。\\
 
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.45\textwidth]{images/intro_01.png}
+    \caption{參數組合$\alpha=1.5$}
+    \label{fig:aco_parameter_01}
+\end{figure}
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.45\textwidth]{images/intro_02.png}
+    \caption{參數組合$\alpha=1.4$}
+    \label{fig:aco_parameter_02}
+\end{figure}
+
+在圖 \ref{fig:aco_parameter_01} 與圖 \ref{fig:aco_parameter_02} 中，
+我們展示了兩組不同的 ACO 參數設定所產生的管線佈局結果，
+可以看到$\alpha$僅僅只是差0.1，卻導致了完全不同的收斂路徑與最終解的品質。
+
+
 有鑑於此，本研究提出一種混合式的最佳化架構（GA-ACO），
 引入基因演算法（Genetic Algorithm, GA）作為高階參數調校機制，
 動態且自動地搜尋 ACO 的最佳參數組合。此外，針對多條管線佈局與 GA 龐大評估帶來的龐大計算負荷，
@@ -96,7 +115,11 @@ GA 常被用來解決離散或連續變數的組合問題。在本研究中，GA
 模擬自然界螞蟻覓食行為的演算法。螞蟻在行走路徑上會留下費洛蒙（Pheromone），
 後續的螞蟻會根據費洛蒙濃度與啟發式資訊選擇路徑，進而促使整個蟻群逐漸收斂至最短路徑。
 在管線佈局應用中，ACO 能夠輕易整合各種空間限制與工程懲罰（如轉彎成本），
-具備良好的空間適應能力。然而，傳統 ACO 面臨著容易早熟收斂（Premature Convergence）
+具備良好的空間適應能力，我們參考陳俊仁與翁世光教授的研究 \cite{b2}，
+但為了時間與複雜度我們決定先將管先設置為兩個相互排斥管線以及降至為二維空間，
+同時考量到現實生活中管線多半為單一進入點與多個終點的佈局需求(如室內配電為電箱為起點，電器為終點)，
+因此我們只針對單一起點與多終點的佈局進行優化
+。然而，傳統 ACO 面臨著容易早熟收斂（Premature Convergence）
 與參數敏感度高的缺陷，這也是本研究結合 GA 進行優化的主要動機。
 
 \subsection{CUDA Acceleration}
@@ -129,7 +152,7 @@ C_{gene} = \frac{P_{1,gene} + P_{2,gene}}{2}
 \end{equation}
 為維持族群的多樣性並避免陷入局部最佳解，每個生成的子代基因皆有 $p_{m} = 0.2$ 的機率發生突變。突變操作會無視父代特徵，直接於該參數的合理物理邊界 $[L_{bound}, U_{bound}]$ 內，重新生成一均勻分布之隨機數。
 
-\begin{algorithm}[H]
+\begin{algorithm}[!t]
 \caption{Genetic Algorithm for ACO Hyperparameter Tuning}
 \begin{algorithmic}[1]
 \STATE Initialize Population $P$ with size $N$
@@ -154,7 +177,7 @@ C_{gene} = \frac{P_{1,gene} + P_{2,gene}}{2}
 
 \subsection{Ant Colony Optimization}
 在 ACO 的實作中，我們將每種屬性的管線（如瓦斯管與電管）指派給特定類型的螞蟻。
-為了支援多起點對多終點的佈局，螞蟻的生成採用餘數與商數的交錯分配法，確保所有起迄組合均被均勻探索。
+為了支援多終點的佈局，螞蟻的生成採用餘數與商數的交錯分配法，確保所有起迄組合均被均勻探索。
 螞蟻的移動決策基於輪盤賭選擇法（Roulette Wheel Selection），
 並引入了 $\epsilon$-Greedy 策略，賦予螞蟻 3\% 的機率進行盲目隨機探索，
 以利跳脫局部最佳解。在費洛蒙更新機制上，我們採用了混合釋放策略：
@@ -175,7 +198,7 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 \end{equation}
 此機制允許 GA 在初期接受包含輕微重疊的瑕疵解，並透過梯度引導族群逐步收斂至重疊數 $C_{overlap} = 0$ 的合法佈局。
 
-\begin{algorithm}[H]
+\begin{algorithm}[!ht]
 \caption{Parallel ACO Routing with Soft Penalty}
 \begin{algorithmic}[1]
 \FOR{$iter = 1$ to $MAX\_ITER$}
@@ -205,10 +228,9 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 以及專屬的並行通道（\texttt{cudaStream\_t}）。
 在 CPU 端，利用 C++ 的 \texttt{std::thread} 同時喚醒所有染色體的評估程序；
 而在 GPU 端，各染色體的 ACO 模擬被分配至不同的 Stream 異步執行（Asynchronous Execution）。
-此設計確保了十組甚至數十組 ACO 演算法能夠在 GPU 內部「真正同時」運行，
-且互不干擾記憶體，徹底解決了 Race Condition 的問題，並將整體運算時間縮減至單執行緒的數分之一。
+此設計確保了十組甚至數十組 ACO 演算法能夠在 GPU 內部「真正同時」運行。
 
-\begin{algorithm}[H]
+\begin{algorithm}[!t]
 \caption{Multi-Stream CUDA Execution Architecture}
 \begin{algorithmic}[1]
 \STATE Array \texttt{envs}[$N$] of \texttt{ACO\_Environment} (each with unique \texttt{cudaStream\_t})
@@ -236,7 +258,7 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 此機制提供了一目了然的演化收斂折線圖，協助開發者即時監控參數優化狀態，
 並確保了無頭模式（Headless）下執行與輸出的穩定性。
 
-\begin{algorithm}[H]
+\begin{algorithm}[!t]
 \caption{Background Visualization Workflow}
 \begin{algorithmic}[1]
 \STATE Initialize headless Gnuplot process via \texttt{popen}
@@ -257,8 +279,12 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \section{Experiment}
+在以下實驗中，我們統一使用$2000$隻螞蟻的設定，並將 GA 的族群大小定為 $N=40$，演化世代數為 $25$代，
+GPU使用RTX3090，CPU使用Intel Xeon E5-2680v4，系統使用Ubuntu 24.04。
 
-\clearpage
+\subsection{CUDA Acceleration Performance}
+
+
 
 \section{Conclusion}
 
