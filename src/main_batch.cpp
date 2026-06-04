@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <numeric>
 #include <cmath>
+#include <vector>
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -22,15 +23,33 @@ int main(){
     fs::create_directories("data");
     fs::create_directories("img");
 
-    // 準備統計輸出的 CSV 檔案
-    ofstream csv_file("data/statistics.csv", ios::trunc);
-    csv_file << "map,min,avg,max,sd\n";
+    // ========================================================
+    // 準備三個統計輸出的 CSV 檔案
+    // ========================================================
+    // 1. 總計統計檔 (min, avg, max, sd)
+    ofstream csv_stat("data/statistics.csv", ios::trunc);
+    csv_stat << "map,min,avg,max,sd\n";
+
+    // 2. 歷代收斂分數檔 (iter_1 ~ iter_N)
+    ofstream csv_iter("data/iteration_scores.csv", ios::trunc);
+    csv_iter << "data,test";
+    for(int i = 1; i <= GA_GENERATIONS; i++){
+        csv_iter << ",iter_" << i;
+    }
+    csv_iter << "\n";
+
+    // 3. 最佳參數與分數檔 (alpha, beta, rho, Q, T_w, C_w, Dr, score)
+    ofstream csv_param("data/best_parameters.csv", ios::trunc);
+    csv_param << "data,alpha,beta,rho,Q,T_w,C_w,Dr,score\n";
+    // ========================================================
 
     int map_idx = 0;
+    const bool is_gpu = true; // 固定使用 GPU 進行批次測試
 
     // 不斷尋找下一個 mapX.txt 直到找不到為止
     while(true){
         string map_filename = "data/map" + to_string(map_idx) + ".txt";
+        string map_name = "map" + to_string(map_idx);
 
         if(!fs::exists(map_filename)){
             if(map_idx == 0){
@@ -39,7 +58,7 @@ int main(){
             else{
                 cout << "\n==================================================" << endl;
                 cout << ">> 所有地圖處理完畢！共完成 " << map_idx << " 張地圖的批次測試。" << endl;
-                cout << ">> 統計結果已儲存於 data/statistics.csv" << endl;
+                cout << ">> 統計結果已儲存於 data 資料夾下的 3 個 CSV 檔案中！" << endl;
                 cout << "==================================================" << endl;
             }
             break; // 找不到下一張地圖，結束批次測試
@@ -50,7 +69,7 @@ int main(){
         cout << "==================================================" << endl;
 
         // 建立專屬於這張地圖的輸出資料夾
-        string map_dir = "data/map" + to_string(map_idx);
+        string map_dir = "data/" + map_name;
         fs::create_directories(map_dir);
 
         // 載入這張地圖到 GPU 全域共用記憶體
@@ -58,13 +77,13 @@ int main(){
 
         vector<double> scores; // 儲存 20 次執行的最終 Best Score
 
+        auto batch_start_time = chrono::high_resolution_clock::now();
         for(int test_idx = 0; test_idx < 20; ++test_idx){
+            auto test_start_time = chrono::high_resolution_clock::now();
             cout << "  [執行 " << map_filename << " - Test " << test_idx << " / 19] ..." << endl;
 
-            // 為每次測試獨立初始化環境，避免亂數與記憶體狀態互相污染
             vector<ACO_Environment *> envs(POP_SIZE);
             for(int i = 0; i < POP_SIZE; i++){
-                // 給予不同的 Seed 保證每次實驗完全獨立
                 envs[i] = new ACO_Environment(i, time(NULL) + i + test_idx * 1000);
             }
 
@@ -78,12 +97,10 @@ int main(){
                 };
             }
 
-            // 清空並準備本回合的 GA Log
             ofstream log_file("ga_log.txt", ios::trunc);
             log_file << "Gen Best Median\n";
             log_file.close();
 
-            // 背景呼叫 Gnuplot
             FILE *gp;
 #ifdef _WIN32
             gp = _popen("gnuplot", "w");
@@ -99,20 +116,25 @@ int main(){
                 fprintf(gp, "set grid\n");
             }
 
+            // 用來儲存這個 Test 中，每一個 Generation 的 Best Score
+            vector<double> gen_best_scores;
+
             // --- 開始 GA 演化迴圈 ---
             for(int gen = 1; gen <= GA_GENERATIONS; gen++){
                 vector<thread> workers;
+                auto start_time = chrono::high_resolution_clock::now();
                 for(int i = 0; i < POP_SIZE; i++){
                     if(population[i].fitness < 0){
                         workers.emplace_back([&, i](){
-                            // 背景靜默評估 (Visualize = false)
-                            population[i].fitness = envs[i]->run_aco(population[i], false, gen);
+                            population[i].fitness = envs[i]->run_aco(population[i], false, gen, is_gpu);
                         });
                     }
                 }
                 for(auto &w : workers) w.join();
+                auto end_time = chrono::high_resolution_clock::now();
+                chrono::duration<double> gen_duration = end_time - start_time;
+                cout << ">> 世代 " << gen << " 評估完成，耗時: " << gen_duration.count() << " 秒" << endl;
 
-                // 排序並結算本代成績
                 sort(population.begin(), population.end(), [](const Chromosome &a, const Chromosome &b){
                     return a.fitness < b.fitness;
                 });
@@ -120,26 +142,27 @@ int main(){
                 double best_score = population[0].fitness;
                 double median_score = population[POP_SIZE / 2].fitness;
 
+                // 記錄這一代的最佳分數到陣列中
+                gen_best_scores.push_back(best_score);
+
                 log_file.open("ga_log.txt", ios::app);
                 log_file << gen << " " << best_score << " " << median_score << "\n";
                 log_file.close();
 
-                // 即時寫入並讓 Gnuplot 更新圖表到指定的專屬目錄
                 if(gp){
                     string curve_path = map_dir + "/test" + to_string(test_idx) + "_curve.png";
                     fprintf(gp, "set output '%s'\n", curve_path.c_str());
                     fprintf(gp, "plot 'ga_log.txt' skip 1 using 1:2 with linespoints lw 2 lc rgb 'red' title 'Best Score', \\\n");
                     fprintf(gp, "     '' skip 1 using 1:3 with linespoints lw 2 lc rgb 'blue' title 'Median Score'\n");
                     fflush(gp);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20)); // 給予 I/O 寫入緩衝時間
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 }
 
-                // 只有在最後一代才進行視覺化繪圖與存圖
                 bool is_last_gen = (gen == GA_GENERATIONS);
                 if(is_last_gen){
-                    envs[0]->run_aco(population[0], true, gen);
+                    // 確保使用相同的運算設備畫圖
+                    envs[0]->run_aco(population[0], true, gen, is_gpu);
 
-                    // 從 img/iter_XX.png 複製並重新命名到我們的 data 目錄中
                     string src_img = "img/iter_" + to_string(gen) + ".png";
                     string dst_img = map_dir + "/test" + to_string(test_idx) + "_img.png";
                     if(fs::exists(src_img)){
@@ -147,7 +170,6 @@ int main(){
                     }
                 }
 
-                // 交配與突變 (完全沿用你的設定)
                 if(gen < GA_GENERATIONS){
                     for(int i = POP_SIZE / 2; i < POP_SIZE; i++){
                         int p1 = rand() % (POP_SIZE / 2);
@@ -184,11 +206,41 @@ int main(){
 
             scores.push_back(population[0].fitness);
 
-            // 釋放記憶體，準備下一次 Test
+            // ========================================================
+            // 寫入 CSV 紀錄 (Iteration 分數與最佳參數)
+            // ========================================================
+            // 寫入 iteration_scores.csv
+            csv_iter << map_name << "," << test_idx;
+            for(double s : gen_best_scores){
+                csv_iter << "," << s;
+            }
+            csv_iter << "\n";
+            csv_iter.flush();
+
+            // 寫入 best_parameters.csv
+            csv_param << map_name << ","
+                << population[0].alpha << ","
+                << population[0].beta << ","
+                << population[0].rho << ","
+                << population[0].Q << ","
+                << population[0].turn_w << ","
+                << population[0].clear_w << ","
+                << population[0].diffusion_rad << ","
+                << population[0].fitness << "\n";
+            csv_param.flush();
+            // ========================================================
+
             for(int i = 0; i < POP_SIZE; i++) delete envs[i];
+            auto test_end_time = chrono::high_resolution_clock::now();
+            chrono::duration<double> test_duration = test_end_time - test_start_time;
+            cout << "  -> Test " << test_idx << " 完成，Best Score: " << population[0].fitness << "，耗時: " << test_duration.count() << " 秒" << endl;
         } // 結束 20 次 Test
 
-        // --- 統計並寫入 CSV ---
+        auto batch_end_time = chrono::high_resolution_clock::now();
+        chrono::duration<double> batch_duration = batch_end_time - batch_start_time;
+        cout << "\n>> 地圖 " << map_filename << " 的 20 次測試全部完成，總耗時: " << batch_duration.count() << " 秒" << endl;
+
+        // --- 統計並寫入總計 CSV (statistics.csv) ---
         double min_s = *min_element(scores.begin(), scores.end());
         double max_s = *max_element(scores.begin(), scores.end());
         double sum = accumulate(scores.begin(), scores.end(), 0.0);
@@ -198,18 +250,19 @@ int main(){
         for(double s : scores){
             variance += (s - avg) * (s - avg);
         }
-        double sd = sqrt(variance / scores.size()); // 計算標準差
+        double sd = sqrt(variance / scores.size());
 
-        csv_file << "map" << map_idx << "," << min_s << "," << avg << "," << max_s << "," << sd << "\n";
-        csv_file.flush();
+        csv_stat << map_name << "," << min_s << "," << avg << "," << max_s << "," << sd << "\n";
+        csv_stat.flush();
 
         cout << "  -> 統計結果: Min=" << min_s << ", Avg=" << avg << ", Max=" << max_s << ", SD=" << sd << endl;
 
-        // 釋放該地圖的記憶體，並推進至下一張地圖
         free_shared_data();
         map_idx++;
     } // 結束 map_idx 迴圈
 
-    csv_file.close();
+    csv_stat.close();
+    csv_iter.close();
+    csv_param.close();
     return 0;
 }

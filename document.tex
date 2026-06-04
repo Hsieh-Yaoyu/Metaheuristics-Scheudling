@@ -187,7 +187,9 @@ C_{gene} = \frac{P_{1,gene} + P_{2,gene}}{2}
 系統會計算重疊次數並給予極重的軟性懲罰，引導演算法尋找無碰撞的完美配置。
 
 \subsubsection{Cost Function}
-為了全面評估管線配置的優劣，本研究設計之成本函數（Cost Function）結合了路徑長度、幾何彎折度以及管線間的實體干涉懲罰。單一螞蟻的路徑成本 $S_{path}$ 定義如下：
+為了全面評估管線配置的優劣，相比陳俊仁與翁世光教授的研究 \cite{b2}只使用路徑長度和管線彎折作為成本函數（Cost Function），
+本研究設計之成本函數另外加入管線間的實體干涉懲罰，可以使螞蟻間的路徑選擇更具現實意義。
+單一螞蟻的路徑成本 $S_{path}$ 定義如下：
 \begin{equation}
 S_{path} = L + (W_{turn} \times C_{turn}) + (W_{clear} \times P_{clear})
 \end{equation}
@@ -279,10 +281,48 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \section{Experiment}
-在以下實驗中，我們統一使用$2000$隻螞蟻的設定，並將 GA 的族群大小定為 $N=40$，演化世代數為 $25$代，
-GPU使用RTX3090，CPU使用Intel Xeon E5-2680v4，系統使用Ubuntu 24.04。
+
 
 \subsection{CUDA Acceleration Performance}
+為了驗證 CUDA 加速架構在 GA-ACO 演算法中的實際效益，本研究針對 CPU 與 GPU 的執行時間進行了對照實驗。
+為體現 CUDA 強大的平行運算能力，同時避免過多的 PCIe 記憶體傳輸開銷佔據主導地位，
+實驗統一將螞蟻數量設定為 $2000$ 隻，並將 GA 的族群大小定為 $N=40$。
+硬體環境採用 NVIDIA RTX 3090 GPU 作為硬體加速器，
+並以具備 14 核心 28 執行緒的伺服器級處理器 Intel Xeon E5-2680 v4 CPU 作為對照組
+（啟用 OpenMP 多核心加速），作業系統為 Ubuntu 24.04。
+
+實驗紀錄了前 3 次 GA 迭代（Iteration）的執行時間，詳細數據如表 \ref{tab:cuda_perf} 所示。
+
+\begin{table}[!t]
+    \centering
+    \caption{CPU 與 GPU 在不同迭代次數下的執行時間比較}
+    \label{tab:cuda_perf}
+    \renewcommand{\arraystretch}{1.2}
+    \begin{tabular}{|c|c|c|}
+        \hline
+        \textbf{Iteration} & \textbf{GPU Time} & \textbf{CPU Time} \\ \hline
+        1 & 123.621 s & 103.348 s \\ \hline
+        2 & 62.7254 s & 64.8276 s \\ \hline
+        3 & 60.0447 s & 67.7726 s \\ \hline
+    \end{tabular}
+\end{table}
+
+由表 \ref{tab:cuda_perf} 的實驗結果可觀察到一項經典的異質運算現象：
+在第一次迭代（Iteration 1）中，GPU 的執行時間（123.621 秒）反倒略慢於 CPU（103.348 秒）。
+此現象主要歸因於 CUDA 架構初次啟動時的「初始化開銷（Initialization Overhead）」。
+在程式剛啟動時，系統必須進行 GPU 端的記憶體配置（如 \texttt{cudaMalloc}）、cuRAND 
+隨機數生成器狀態矩陣的建立，以及大量的初始地圖與環境參數從主機端（Host）拷貝至設備端（Device）等操作，
+這些硬體層級的準備工作導致了首代的耗時較長。
+
+然而，一旦初始化完成並進入穩定運算階段（Iteration 2 與 Iteration 3），
+GPU 的極致平行優勢便立刻顯現。從第二次迭代開始，GPU 的執行時間穩定下降至約 60 秒至 62 秒，
+成功反超並領先 CPU 的 64 秒至 67 秒。考量到本實驗每代需同時評估 40 組參數，
+相當於每代有高達 $80,000$ 隻螞蟻在進行路徑探索，Intel Xeon E5-2680 v4
+ 憑藉其強大的多執行緒能力維持了相當出色的基準表現；但 RTX 3090 依舊藉由其數以千計的 CUDA 核心，
+ 在常態運算中展現了更卓越的吞吐量。可以預期，未來若進一步擴展網格地圖的規模或增加螞蟻群體的數量，
+ GPU 分攤掉記憶體傳輸成本後的加速比（Speedup Ratio）將會更加顯著。
+ 而後續的實驗中為了節省時間，我們會將將$ANT_COUNT$降至100隻，並將 GA 的族群大小定為 $N=80$，
+ 同時該資料量並沒有到非常大容易在IO上造成瓶頸，因此我們選擇CPU作為接下來的測試設備。
 
 
 

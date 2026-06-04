@@ -248,7 +248,7 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
 
     std::vector<std::mt19937> cpu_gens(ANT_COUNT);
     for(int i = 0; i < ANT_COUNT; i++){
-        cpu_gens[i] = std::mt19937(12345 + env_id * 100 + i);
+        cpu_gens[i] = std::mt19937(12345 + i);
     }
 
     int debug_valid_path_found = 0;
@@ -318,7 +318,7 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
         else{
             // 使用 CPU 運算 (免去記憶體傳輸開銷)
             bool *cpu_visited = new bool[ANT_COUNT * rows * cols]();
-            
+
             cpu_ant_movement(h_ants.data(), cpu_visited, flat_pheromones.data(), grid_map_cpu,
                 rows, cols, MAX_PHERO, dna.alpha, dna.beta, ANT_COUNT, cpu_gens);
 

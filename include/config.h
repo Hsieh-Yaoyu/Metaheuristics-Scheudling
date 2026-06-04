@@ -7,7 +7,7 @@ using namespace std;
 using namespace cv;
 
 // --- 演算法基本參數 ---
-const int ANT_COUNT = 2000;
+const int ANT_COUNT = 100;
 const double MAX_PHERO = 100.0;
 const int MAX_ITER = 1000;
 const int CELL_SIZE = 25;
@@ -16,7 +16,7 @@ const int MAX_PATH_LEN = 800;
 const int MAX_ENDPOINTS = 10;
 const int SAFE_DISTANCE = 3;
 
-const int POP_SIZE = 40;
+const int POP_SIZE = 80;
 const int GA_GENERATIONS = 25;
 
 // --- 視覺化顏色設定 ---
