@@ -14,25 +14,33 @@ namespace fs = std::filesystem;
 
 int main(int argc, char *argv[]){
     Chromosome dna;
-    string map_filename = "data/map.txt";
+    string map_filename = "data/map0.txt";
     bool run_20_times = false; // 新增：是否連續執行 20 次的旗標
 
     // 檢查是否有透過指令列輸入參數
     // 現在需要至少 9 個參數: 程式名 + 7個參數 + true/false
-    if(argc >= 9){
-        dna.alpha = stod(argv[1]);
-        dna.beta = stod(argv[2]);
-        dna.rho = stod(argv[3]);
-        dna.Q = stod(argv[4]);
-        dna.turn_w = stod(argv[5]);
-        dna.clear_w = stod(argv[6]);
-        dna.diffusion_rad = stod(argv[7]);
+    if(argc >= 1){
+        string tmp = argv[1];
+        if(tmp != "true"){
+            dna.alpha = stod(argv[1]);
+            dna.beta = stod(argv[2]);
+            dna.rho = stod(argv[3]);
+            dna.Q = stod(argv[4]);
+            dna.turn_w = stod(argv[5]);
+            dna.clear_w = stod(argv[6]);
+            dna.diffusion_rad = stod(argv[7]);
 
-        string flag = argv[8];
-        if(flag == "true" || flag == "1") run_20_times = true;
+            string flag = argv[8];
+            if(flag == "true" || flag == "1") run_20_times = true;
 
-        if(argc >= 10) map_filename = argv[9]; // 第9個參數允許輸入自訂地圖
+            if(argc >= 10) map_filename = argv[9]; // 第9個參數允許輸入自訂地圖
+        }
+        else{
+            string flag = argv[1];
+            if(flag == "true" || flag == "1") run_20_times = true;
+            dna = { 1.0, 2.0, 0.1, 100.0, 10.0, 5.0, 2.0, -1.0 };
 
+        }
         cout << ">> 載入自訂參數測試模式..." << endl;
     }
     else{
@@ -66,7 +74,7 @@ int main(int argc, char *argv[]){
             ACO_Environment env(0, time(NULL) + i * 1000);
 
             // 執行 ACO，關閉單次的視覺化以加快速度 (傳入 use_gpu = true)
-            double s = env.run_aco(dna, false, 0, true);
+            double s = env.run_aco(dna, true, 0, false);
             scores.push_back(s);
 
             // 寫入 CSV 檔案
