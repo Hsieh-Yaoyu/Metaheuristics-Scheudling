@@ -7,7 +7,7 @@
 class ACO_Environment{
 public:
     int env_id;
-    int cpu_seed;
+    unsigned long base_seed; // <--- 新增這行
     cudaStream_t stream;
 
     vector<vector<vector<double>>> pheromones;

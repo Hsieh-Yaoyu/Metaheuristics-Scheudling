@@ -121,9 +121,9 @@ ACO_Environment::ACO_Environment(int id, unsigned long seed) : env_id(id){
     cudaMalloc(&d_rand_states, ANT_COUNT * sizeof(curandState));
 
     int blockSize = 256;
-    cpu_seed = seed;
+    base_seed = seed;
     int numBlocks = (ANT_COUNT + blockSize - 1) / blockSize;
-    init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, seed, ANT_COUNT);
+    init_rand_kernel << <numBlocks, blockSize, 0, stream >> > (d_rand_states, base_seed, ANT_COUNT);
     cudaStreamSynchronize(stream);
 }
 
@@ -249,7 +249,7 @@ double ACO_Environment::run_aco(const Chromosome &dna, bool visualize, int gen_n
 
     std::vector<std::mt19937> cpu_gens(ANT_COUNT);
     for(int i = 0; i < ANT_COUNT; i++){
-        cpu_gens[i] = std::mt19937(cpu_seed + i);
+        cpu_gens[i] = std::mt19937(base_seed + i);
     }
 
     int debug_valid_path_found = 0;

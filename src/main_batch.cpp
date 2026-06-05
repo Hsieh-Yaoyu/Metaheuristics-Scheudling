@@ -44,7 +44,7 @@ int main(){
     // ========================================================
 
     int map_idx = 0;
-    const bool is_gpu = true; // 固定使用 GPU 進行批次測試
+    const bool is_gpu = false; // 固定使用 GPU 進行批次測試
 
     // 不斷尋找下一個 mapX.txt 直到找不到為止
     while(true){
@@ -82,9 +82,11 @@ int main(){
             auto test_start_time = chrono::high_resolution_clock::now();
             cout << "  [執行 " << map_filename << " - Test " << test_idx << " / 19] ..." << endl;
 
+            unsigned long current_test_seed = time(NULL) + test_idx * 1000;
+
             vector<ACO_Environment *> envs(POP_SIZE);
             for(int i = 0; i < POP_SIZE; i++){
-                envs[i] = new ACO_Environment(i, time(NULL) + i + test_idx * 1000);
+                envs[i] = new ACO_Environment(i, current_test_seed);
             }
 
             vector<Chromosome> population(POP_SIZE);

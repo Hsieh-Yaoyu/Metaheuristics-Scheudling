@@ -66,7 +66,7 @@ int main(int argc, char *argv[]){
         fprintf(gp, "set grid\n");
     }
 
-    bool is_gpu = true; // 預設使用 GPU 運算，若要測試 CPU 可改為 false
+    bool is_gpu = false; // 預設使用 GPU 運算，若要測試 CPU 可改為 false
     for(int gen = 1; gen <= GA_GENERATIONS; gen++){
         cout << "\n[ 世代 " << gen << " / " << GA_GENERATIONS << " 開始 " <<
             (is_gpu ? "GPU" : "CPU") << " 平行運算評估 ]" << endl;
