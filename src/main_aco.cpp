@@ -39,6 +39,7 @@ int main(int argc, char *argv[]){
             string flag = argv[1];
             if(flag == "true" || flag == "1") run_20_times = true;
             dna = { 1.0, 2.0, 0.1, 100.0, 10.0, 5.0, 2.0, -1.0 };
+            map_filename = argv[2]; // 第二個參數允許輸入自訂地圖
 
         }
         cout << ">> 載入自訂參數測試模式..." << endl;
