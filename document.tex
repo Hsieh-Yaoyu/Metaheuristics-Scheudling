@@ -49,8 +49,8 @@ Taipei, Taiwan(R.O.C) \\
 \end{abstract}
 
 \section{Introduction}
-隨著現代工程與建築設計的複雜度日益提升，管線佈局（Pipe Routing）
-問題已成為設施配置中不可或缺且極具挑戰性的一環。在有限的空間內，
+隨著現代工程與建築設計的複雜度日益提升，管線佈局問題（Pipe Routing Problem）
+已成為設施配置中不可或缺且極具挑戰性的一環。在有限的空間內，
 如何有效且安全地佈置多種不同屬性的管線（如瓦斯管、電管、水管等），
 同時滿足物理限制與工程規範，是一個典型的 NP-hard 最佳化問題 \cite{b1}。
 傳統的佈局方法多依賴工程師的經驗，不僅耗時費力，且難以在複雜環境中保證解的最佳性。\\
@@ -84,8 +84,8 @@ Taipei, Taiwan(R.O.C) \\
 有鑑於此，本研究提出一種混合式的最佳化架構（GA-ACO），
 引入基因演算法（Genetic Algorithm, GA）作為高階參數調校機制，
 動態且自動地搜尋 ACO 的最佳參數組合。此外，針對多條管線佈局與 GA 龐大評估帶來的龐大計算負荷，
-本研究利用 CUDA 架構對 ACO 的路徑探索過程進行大規模平行化加速（Parallelization），
-並針對管線間的安全距離（Clearance）設計了軟性懲罰機制（Soft Penalty），
+本研究利用 CUDA 架構對 ACO 的路徑探索過程進行大規模平行化加速，
+並針對管線間的安全距離設計了軟性懲罰機制（Soft Penalty），
 以確保管線在受限空間中的合法性與合理性。最後，
 本研究開發了一套基於 OpenCV 與 Gnuplot 的即時動態視覺化系統，
 不僅能直觀地展示管線收斂結果，亦能即時追蹤 GA 的演化過程，為管線佈局問題提供了一個高效、
@@ -94,12 +94,12 @@ Taipei, Taiwan(R.O.C) \\
 \section{Related Work}
 
 \subsection{Pipe Routing Problem}
-管線佈局問題（Pipe Routing Problem）廣泛存在於船舶設計、化工廠、建築機電（MEP）與積體電路設計等領域 \cite{b1}。
+管線佈局問題廣泛存在於船舶設計、化工廠、建築機電（MEP）與積體電路設計等領域 \cite{b1}。
 其核心目標是在給定的三維或二維空間中，為多個起點與終點尋找無碰撞的連接路徑，
 同時將總長度、彎折次數及與其他管線的安全距離最小化。早期的研究多採用確定性演算法，
 如 Dijkstra 演算法 \cite{b3} 或 A* 演算法 \cite{b4}，雖然能確保找到單一管線的最短路徑，
 但在處理多管線且需考慮複雜避讓規則時，其運算時間會隨問題規模呈指數增長。
-近年來，研究焦點逐漸轉向啟發式演算法，以期在合理的時間內求得近似最佳解。
+近年來，研究焦點逐漸轉向啟發式演算法，期待合理時間內求得近似最佳解。
 
 \subsection{Genetic Algorithm}
 基因演算法（Genetic Algorithm, GA）是一種模擬自然界物種演化過程的群體演算法 \cite{b5}。
@@ -277,7 +277,7 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 \ENDFOR
 \end{algorithmic}
 \end{algorithm}
-
+\clearpage
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \section{Experiment}
@@ -293,7 +293,7 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 
 實驗紀錄了前 3 次 GA 迭代（Iteration）的執行時間，詳細數據如表 \ref{tab:cuda_perf} 所示。
 
-\begin{table}[!t]
+\begin{table}[H]
     \centering
     \caption{CPU 與 GPU 在不同迭代次數下的執行時間比較}
     \label{tab:cuda_perf}
@@ -326,21 +326,103 @@ GPU 的極致平行優勢便立刻顯現。從第二次迭代開始，GPU 的執
 
 \subsection{GA-ACO Performance}
 
-\subsubsection{Optimization verification}
-%alpha, beta, rho, Q, turn_w, clear_w, diffusion_rad
-%1.68044 3.99775 0.177945 106.823 1.63136 2.67383 1.27466
-在此章節中，我們將展示 GA-ACO 演算法在管線佈局問題上的優化效果。
-為了驗證 GA 在 ACO 參數調校上的有效性，我們設計了一組對照實驗：一組為「固定參數 ACO」，即使用預設的參數組合
-（如 $\alpha=1.0$, $\beta=2.0$, $\rho=0.5$ 等）進行多次獨立執行；另一組為「GA-優化 ACO」，
-即讓 GA 自動搜尋最佳參數組合並評估其性能。\\
+\subsubsection{Optimization Verification}
 
-以下實驗我們使用\texbf{map0}作為測試場景，該地圖包含兩條相互排斥的管線（瓦斯管與電管），
-並且每條管線均有一個起點與多個終點的佈局需求。對照組參數設定為 $\alpha=1.0$, $\beta=2.0$, $\rho=0.5$, $Q=100$, $turn\_w=1.0$, $clear\_w=1.0$ 與 $diffusion\_rad=2$。
-實驗組使用GA所找尋到的最佳參數組合為 $\alpha=1.68044$, $\beta=3.99775$, $\rho=0.177945$, $Q=106.823$, $turn\_w=1.63136$, $clear\_w=2.67383$ 與 $diffusion\_rad=1.27466$，在迭代中其$Score=167.512$。
+在此章節中，我們將展示 GA-ACO 演算法在管線佈局問題上的優化效果。為了驗證 GA 在 ACO 參數調校上的有效性，我們設計了一組對照實驗：一組為固定參數 ACO，即使用預設的參數組合（如 $\alpha=1.0$、$\beta=2.0$、$\rho=0.5$ 等）進行多次獨立執行；另一組為 GA-ACO，即讓 GA 自動搜尋最佳參數組合並評估其性能。
+
+以下實驗我們使用 map0 作為測試場景，該地圖包含兩條相互排斥的管線（瓦斯管與電管），並且每條管線均有一個起點與多個終點的佈局需求。對照組採用固定參數 ACO，實驗組則使用 GA 所搜尋到的最佳參數組合，如表 \ref{tab:aco_params} 所示。
+
+\begin{table}[htbp]
+\caption{Parameter Settings of ACO and GA-ACO}
+\label{tab:aco_params}
+\centering
+\begin{tabular}{c c c}
+\hline
+Parameter & ACO & GA-ACO \\
+\hline
+$\alpha$ & 1.00 & 1.68044 \\
+$\beta$ & 2.00 & 3.99775 \\
+$\rho$ & 0.50 & 0.177945 \\
+$Q$ & 100.00 & 106.823 \\
+$turn\_w$ & 1.00 & 1.63136 \\
+$clear\_w$ & 1.00 & 2.67383 \\
+$diffusion\_rad$ & 2.00 & 1.27466 \\
+\hline
+\end{tabular}
+\end{table}
+
+由表 \ref{tab:aco_params} 可觀察到，GA 所搜尋出的參數與固定參數 ACO 具有明顯差異。其中，$\alpha$ 與 $\beta$ 皆有所提升，代表最佳化後的 ACO 在搜尋過程中更重視費洛蒙累積與啟發式資訊；而 $\rho$ 則由 0.50 降低至 0.177945，表示費洛蒙揮發速度降低，使較佳路徑能在搜尋過程中保留較長時間。此外，$turn\_w$ 與 $clear\_w$ 的提升顯示 GA-ACO 在成本評估中更加重視轉彎懲罰與安全距離限制。
+
+在該組 GA-ACO 參數下，實驗可得到最佳結果，其 Score 為 167.512。此結果顯示 GA 能有效搜尋出適合 ACO 的參數組合，作為後續多地圖實驗比較的基礎。
+
+\subsubsection{Performance Comparison}
+
+為進一步驗證 GA-ACO 在不同地圖環境中的表現，本研究針對 Map0 至 Map4 進行固定參數 ACO 與 GA-ACO 的比較。每組地圖皆執行 20 次獨立測試，並計算其平均 Score。由於 Score 綜合考量路徑長度、轉彎次數、安全距離懲罰與重疊懲罰，因此數值越低代表管線佈局結果越佳。實驗結果如表 \ref{tab:aco_gaaco_comparison} 所示。
+
+\begin{table}[htbp]
+\caption{Average Score Comparison Between ACO and GA-ACO}
+\label{tab:aco_gaaco_comparison}
+\centering
+\begin{tabular}{c c c c}
+\hline
+Map & ACO Avg. & GA-ACO Avg. & Improvement \\
+\hline
+Map0 & 23622.69 & 17996.00 & 23.8\% \\
+Map1 & 286156.00 & 89714.23 & 68.6\% \\
+Map2 & 397.74 & 113.30 & 71.5\% \\
+Map3 & 776.74 & 149.56 & 80.7\% \\
+Map4 & 807.07 & 215.98 & 73.2\% \\
+\hline
+\end{tabular}
+\end{table}
+
+由表 \ref{tab:aco_gaaco_comparison} 可觀察到，GA-ACO 在五組測試地圖上皆能取得低於固定參數 ACO 的平均 Score，表示 GA 自動調參能有效改善 ACO 的路徑搜尋品質。
+
+在 Map0 中，GA-ACO 將平均 Score 由 23622.69 降低至 17996.00，改善幅度為 23.8\%。相較於其他地圖，Map0 的改善幅度較小，可能原因為其障礙物配置較規律，使固定參數 ACO 本身仍具有一定搜尋能力，因此 GA-ACO 的優勢較不明顯。
+
+然而，當地圖複雜度提升後，GA-ACO 的改善效果更加顯著。在 Map1 中，平均 Score 由 286156.00 降低至 89714.23，改善幅度達 68.6\%。Map2、Map3 與 Map4 則分別達到 71.5\%、80.7\% 與 73.2\% 的改善幅度。其中 Map3 的改善幅度最高，代表在路徑選擇較複雜的情況下，GA 所搜尋出的參數組合能有效引導 ACO 避免陷入較差的局部解，並提升整體管線佈局品質。
+
+整體而言，固定參數 ACO 在不同地圖中容易受到參數設定影響。若參數不適合目前地圖，可能導致演算法收斂速度過慢、陷入局部最佳解，或產生較高的安全距離與重疊懲罰。相較之下，GA-ACO 能透過演化機制自動搜尋較佳參數，使 ACO 在不同環境中取得更穩定且較低成本的解。
+
+\subsubsection{Statistical Evaluation over 20 Independent Runs}
+
+除了平均 Score 之外，本研究亦進一步分析 20 次獨立執行下的結果分布，以驗證 GA-ACO 的穩定性。固定參數 ACO 與 GA-ACO 在 Map0 至 Map4 上的盒鬚圖比較如圖 \ref{fig:boxplots_map01} 至圖 \ref{fig:boxplots_map4} 所示。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.47\columnwidth]{data/map0_boxplot.png}
+\includegraphics[width=0.47\columnwidth]{data/map1_boxplot.png}
+\caption{Boxplot comparison between ACO and GA-ACO over 20 independent runs on Map0 and Map1.}
+\label{fig:boxplots_map01}
+\end{figure}
+
+由圖 \ref{fig:boxplots_map01} 可觀察到，在 Map0 與 Map1 中，GA-ACO 的 Score 分布普遍低於固定參數 ACO。Map0 中，GA-ACO 雖然仍存在一定變異，但整體分布較固定參數 ACO 低，表示 GA 調參後能有效降低成本。Map1 的兩種方法皆呈現較大變異，顯示該地圖本身具有較高搜尋難度；然而 GA-ACO 的中位數仍低於固定參數 ACO，說明其在複雜地圖中仍具有較佳搜尋能力。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.47\columnwidth]{data/map2_boxplot.png}
+\includegraphics[width=0.47\columnwidth]{data/map3_boxplot.png}
+\caption{Boxplot comparison between ACO and GA-ACO over 20 independent runs on Map2 and Map3.}
+\label{fig:boxplots_map23}
+\end{figure}
+
+由圖 \ref{fig:boxplots_map23} 可觀察到，Map2 與 Map3 的結果顯示，GA-ACO 不僅能降低 Score，也能縮小盒鬚圖的分布範圍，表示其在多次執行下具有較穩定的收斂表現。尤其在 Map3 中，GA-ACO 的結果集中程度明顯高於固定參數 ACO，代表最佳化後的參數組合能使演算法更穩定地收斂至相近品質的解。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.65\columnwidth]{data/map4_boxplot.png}
+\caption{Boxplot comparison between ACO and GA-ACO over 20 independent runs on Map4.}
+\label{fig:boxplots_map4}
+\end{figure}
+
+由圖 \ref{fig:boxplots_map4} 可觀察到，在 Map4 中，兩種方法的差異最為明顯。固定參數 ACO 的 Score 維持在較高區間，而 GA-ACO 幾乎穩定收斂於較低分數附近，顯示在障礙物配置較複雜、路徑選擇較受限制的情況下，GA-ACO 仍能維持良好的搜尋能力與穩定性。
+
+綜合上述結果可知，GA-ACO 不僅能降低平均路徑成本，也能在多數地圖中減少不同執行結果之間的波動。此結果證明，利用基因演算法自動調整 ACO 超參數，能有效提升多管線佈局問題中的求解品質與穩定性。
 
 
 \section{Conclusion}
 
+\clearpage
 \begin{thebibliography}{00}
 \bibitem{b1} W. Jian, Z. Xiaodong, and H. Yisha, ``A novel heuristic approach for 3D pipe routing in complex environments,'' \textit{IEEE Access}, vol. 6, pp. 49764-49775, 2018.
 \bibitem{b2} 陳俊仁、翁世光, ``Pipe Routing Method Based on Ant Colony Algorithm'' \textit{國立臺灣海洋大學資訊工程學系碩士學位論文}, 2023.
