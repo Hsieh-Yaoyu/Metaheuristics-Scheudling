@@ -26,23 +26,30 @@ def read_scores(filename):
 
     return scores
 
-aco_scores = read_scores("map4_aco_20_tests.csv")
-ga_scores = read_scores("map4_ga-aco_20_tests.csv")
+for i in range(5):
+    map_name = f"map{i}"
 
-plt.figure(figsize=(6, 5))
+    aco_scores = read_scores(f"{map_name}_aco_20_tests.csv")
+    ga_scores = read_scores(f"{map_name}_ga-aco_20_tests.csv")
 
-plt.boxplot(
-    [aco_scores, ga_scores],
-    labels=["ACO", "GA-ACO"],
-    showmeans=True
-)
+    plt.figure(figsize=(6, 5))
 
-plt.ylabel("Score")
-plt.title("Map0 20-run Score Distribution")
-plt.grid(axis="y", linestyle="--", alpha=0.5)
+    plt.boxplot(
+        [aco_scores, ga_scores],
+        labels=["ACO", "GA-ACO"],
+        showmeans=True
+    )
 
-plt.tight_layout()
-plt.savefig(base / "map0_boxplot.png", dpi=300)
-plt.show()
+    plt.ylabel("Score")
+    plt.title(f"Map{i} 20-run Score Distribution")
+    plt.grid(axis="y", linestyle="--", alpha=0.5)
 
-print("Saved:", base / "map0_boxplot.png")
+    plt.tight_layout()
+
+    output_path = base / f"{map_name}_boxplot.png"
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+    print("Saved:", output_path)
+
+print("All boxplots generated.")

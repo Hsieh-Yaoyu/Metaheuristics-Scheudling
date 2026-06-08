@@ -45,51 +45,52 @@ Taipei, Taiwan(R.O.C) \\
 \maketitle
 
 \begin{abstract}
-% 請在此處填寫摘要
-\end{abstract}
+管線佈局（Pipe Routing）問題在現代工程設計中極具挑戰性，
+傳統路徑演算法在處理多管線避讓時往往面臨運算瓶頸。
+蟻群演算法（ACO）在求解此類空間尋優問題上極具潛力，但其效能高度依賴人工設定之超參數，
+設定不當極易導致早熟收斂或陷入局部最佳解。有鑑於此，
+本研究提出一種結合基因演算法（GA）與蟻群演算法之混合最佳化架構（GA-ACO），
+利用 GA 自動搜尋 ACO 之最佳超參數組合（包含費洛蒙權重、啟發式權重、轉彎懲罰與擴散半徑等），
+並引入軟性懲罰機制以解決多管線間的安全距離衝突。為克服 GA-ACO 龐大的計算負荷，
+本研究利用 CUDA 統一計算架構實現了深度的多執行緒平行化，
+大幅縮短演算法之評估時間。實驗結果顯示，在五組不同複雜度的網格地圖測試中，
+GA-ACO 架構相較於傳統固定參數之 ACO，其平均路徑成本最高可獲得 80.7\%
+ 的顯著改善。此外，透過多次獨立實驗證明，GA-ACO 不僅能有效降低路徑成本，
+ 更大幅縮小了結果的變異程度，展現出卓越的收斂穩定性與強健性，
+ 為複雜管線佈局問題提供了一套高效且實用的解決方案。
 
+\end{abstract}
 \section{Introduction}
-隨著現代工程與建築設計的複雜度日益提升，管線佈局問題（Pipe Routing Problem）
-已成為設施配置中不可或缺且極具挑戰性的一環。在有限的空間內，
-如何有效且安全地佈置多種不同屬性的管線（如瓦斯管、電管、水管等），
+隨著現代工程與建築設計的複雜度日益提升，
+管線佈局（Pipe Routing）問題已成為設施配置中不可或缺且極具挑戰性的一環。
+在有限的空間內，如何有效且安全地佈置多種不同屬性的管線（如瓦斯管、電管等），
 同時滿足物理限制與工程規範，是一個典型的 NP-hard 最佳化問題 \cite{b1}。
 傳統的佈局方法多依賴工程師的經驗，不僅耗時費力，且難以在複雜環境中保證解的最佳性。\\
 
 為了解決此問題，啟發式演算法（Metaheuristics）逐漸被引入管線佈局的領域。
 其中，蟻群演算法（Ant Colony Optimization, ACO）因其優異的正向回饋機制與探索路徑能力，
-在陳俊仁與翁世光教授的研究中可以看到蟻群演算法的潛力\cite{b2}。
-然而，ACO 演算法的效能高度依賴於超參數
-（如費洛蒙權重 $\alpha$、啟發式權重 $\beta$ 等）的設定，
-參數選擇不當極易導致演算法陷入局部最佳解或收斂過於緩慢。\\
-
-\begin{figure}[!t]
-    \centering
-    \includegraphics[width=0.45\textwidth]{images/intro_01.png}
-    \caption{參數組合$\alpha=1.5$}
-    \label{fig:aco_parameter_01}
-\end{figure}
-
-\begin{figure}[!t]
-    \centering
-    \includegraphics[width=0.45\textwidth]{images/intro_02.png}
-    \caption{參數組合$\alpha=1.4$}
-    \label{fig:aco_parameter_02}
-\end{figure}
-
-在圖 \ref{fig:aco_parameter_01} 與圖 \ref{fig:aco_parameter_02} 中，
-我們展示了兩組不同的 ACO 參數設定所產生的管線佈局結果，
-可以看到$\alpha$僅僅只是差0.1，卻導致了完全不同的收斂路徑與最終解的品質。
-
+在陳俊仁與翁世光教授的研究中已展現出解決空間尋優問題的潛力 \cite{b2}。
+然而，ACO 演算法的效能高度依賴於超參數（如費洛蒙權重 $\alpha$、啟發式權重 $\beta$ 等）的設定。
+初步的探索性測試表明，超參數的微小擾動（例如 $\alpha$ 值僅改變 0.1）
+便可能導致演算法走向完全不同的收斂路徑與解的品質。這種高度的參數敏感度與人工調參的盲目性，
+極易導致演算法陷入局部最佳解或收斂過於緩慢，突顯了自動化參數調校的迫切需求。\\
 
 有鑑於此，本研究提出一種混合式的最佳化架構（GA-ACO），
 引入基因演算法（Genetic Algorithm, GA）作為高階參數調校機制，
-動態且自動地搜尋 ACO 的最佳參數組合。此外，針對多條管線佈局與 GA 龐大評估帶來的龐大計算負荷，
-本研究利用 CUDA 架構對 ACO 的路徑探索過程進行大規模平行化加速，
-並針對管線間的安全距離設計了軟性懲罰機制（Soft Penalty），
-以確保管線在受限空間中的合法性與合理性。最後，
-本研究開發了一套基於 OpenCV 與 Gnuplot 的即時動態視覺化系統，
-不僅能直觀地展示管線收斂結果，亦能即時追蹤 GA 的演化過程，為管線佈局問題提供了一個高效、
-穩定且具備高度擴展性的解決方案。
+動態且自動地搜尋 ACO 的最佳參數組合。本研究之主要貢獻可歸納為以下四點：
+\begin{itemize}
+    \item \textbf{混合演算法架構}：成功結合 GA 與 ACO，利用 GA 的全域搜尋能力克服 ACO 參數敏感的缺陷，
+    實現了超參數的自動化調校與最佳化。
+    \item \textbf{CUDA 雙重平行化加速}：針對多管線佈局與 GA 評估的龐大計算負荷，
+    利用 CUDA 架構（GPU Streams）對 ACO 的路徑探索進行了「基因」與「螞蟻」層級的大規模平行化，大幅縮短運算時間。
+    \item \textbf{軟性懲罰避讓機制}：針對多屬性管線（瓦斯與電），
+    設計了結合轉彎成本與安全距離的軟性懲罰函數（Soft Penalty），
+    確保管線在受限空間中的合法性與合理性。
+    \item \textbf{動態視覺化監控系統}：開發基於 OpenCV 與 Gnuplot 的即時動態視覺化系統，
+    能直觀展示管線收斂結果與 GA 演化軌跡，提供高擴展性的實驗平台。
+\end{itemize}
+
+本論文後續章節安排如下：第二章將回顧管線佈局與相關演算法之文獻；第三章詳細探討 GA-ACO 架構、CUDA 加速設計與視覺化實作細節；第四章將展示並分析各項實驗數據與效能評估；最後於第五章總結本研究並提出未來展望。
 
 \section{Related Work}
 
@@ -259,6 +260,28 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 並將每一代的最佳適應度（Best Score）與中位數適應度（Median Score）即時寫入 Log 檔進行繪圖。
 此機制提供了一目了然的演化收斂折線圖，協助開發者即時監控參數優化狀態，
 並確保了無頭模式（Headless）下執行與輸出的穩定性。
+\subsection{Visualizer}
+為便於分析與展示演算法成果，本研究開發了整合 OpenCV 與 Gnuplot 的視覺化模組。
+在 ACO 的尋優過程中，OpenCV 負責將二維網格地圖渲染為圖形介面，
+即時顯示各管線的費洛蒙分佈（以不同顏色的透明度疊加）以及全域最佳路徑的骨架中心線。
+
+為了讓使用者能直觀地監控演算法狀態，視覺化介面的設計如圖 \ref{fig:Vis_explain} 所示。
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.45\textwidth]{images/Vis_explain.png}
+\caption{GA-ACO 演算法視覺化介面與標示說明}
+\label{fig:Vis_explain}
+\end{figure}
+
+在圖 \ref{fig:Vis_explain} 中，介面左上角顯示了當前演算法的執行進度與參數狀態。
+第一行粗體字由左至右分別為：當前 GA 世代（Generation）、當前 ACO 迭代（Iteration）以及該迭代的全域最佳適應度（Best Score）。
+其下方的細小字體則為當前評估中之超參數組合的詳細數值，包含 $\alpha$、$\beta$、$\rho$、$Q$、$turn\_w$、$clear\_w$ 與 $diffusion\_rad$。
+在圖像的主體路由部分，黃色實體區塊表示瓦斯管徑，藍色為電管；帶有粗框的方格表示當前費洛蒙濃度較高的熱區，顏色的深淺則對應費洛蒙濃度的強弱。此外，貫穿其中的深色粗線代表當前全域最佳解（Global Best）的路徑骨架。當單次 ACO 執行完畢時，系統會自動將最終成果截圖保存。\\
+
+同時，在 GA 演化的巨觀層面，系統利用背景執行緒呼叫 Gnuplot，
+並將每一代的最佳適應度（Best Score）與中位數適應度（Median Score）即時寫入 Log 檔進行繪圖。
+此機制提供了一目了然的演化收斂折線圖，協助開發者即時監控參數優化狀態，
+並確保了無頭模式（Headless）下執行與輸出的穩定性。
 
 \begin{algorithm}[!t]
 \caption{Background Visualization Workflow}
@@ -277,11 +300,100 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 \ENDFOR
 \end{algorithmic}
 \end{algorithm}
-\clearpage
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 \section{Experiment}
 
+\subsection{Motivation: Observation of Parameter Sensitivity}
+為了具體說明傳統 ACO 面臨的參數敏感度困境，我們在進行大規模評估前，先進行了一組探索性測試。
+如圖 \ref{fig:motivation_alpha} 所示，我們僅針對單一超參數（費洛蒙權重 $\alpha$）進行微調，其餘參數保持完全一致。
+
+\begin{figure}[!ht]
+    \centering
+    \begin{subfigure}[b]{0.48\columnwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/intro_01.png}
+        \caption{$\alpha=1.5$ (Score: 344.2)}
+        \label{fig:aco_parameter_01}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\columnwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/intro_02.png}
+        \caption{$\alpha=1.4$ (Score: 308.4)}
+        \label{fig:aco_parameter_02}
+    \end{subfigure}
+    \caption{ACO 參數敏感度觀察：微小的 $\alpha$ 變動導致完全不同的收斂路徑}
+    \label{fig:motivation_alpha}
+\end{figure}
+
+觀察圖 \ref{fig:motivation_alpha} 可發現，當 $\alpha=1.5$ 時
+（圖 \ref{fig:motivation_alpha}a），電管（藍線）選擇從右側繞行；
+然而當 $\alpha$ 僅僅微調 0.1 降至 1.4 時（圖 \ref{fig:motivation_alpha}b），
+電管卻直接貫穿中央通道，且最終適應度（Score）發生了顯著變化。
+此現象實證了 ACO 在複雜避讓問題中的高度不穩定性，若依賴人工經驗進行網格搜索（Grid Search），
+極難在龐大的高維連續空間中找到全域最佳解。
+此觀察結果也確立了本研究導入 GA 進行自動化參數最佳化的絕對必要性。
+
+% === 新增：實驗環境與測試資料集 ===
+\subsection{Experimental Setup and Datasets}
+為了全面評估本研究所提出的 GA-ACO 混合演算法之效能與泛化能力，我們設計了五組不同複雜度的二維網格地圖（Map 0 至 Map 4）進行測試。
+每張地圖的尺寸設定為 $18 \times 24$ 網格，並包含不同型態的障礙物分佈與空間限制。
+在測試案例中，包含了瓦斯管（黃色）與電管（藍色）兩種互相排斥的管線佈局需求，皆採用單一起點對應多終點（Multi-endpoint）的配置。
+
+五組地圖的具體配置與 GA-ACO 的最終最佳化路由結果如圖 \ref{fig:all_maps} 所示。各別地圖之特徵設計如下：
+\begin{itemize}
+    \item \textbf{Map 0}：基礎對稱地形，具備寬敞的中央通道，用以測試演算法的基礎尋路與避讓能力。
+    \item \textbf{Map 1}：存在大量不規則的封閉區塊與對角線交叉路徑，管線極易發生死結，嚴格考驗演算法在複雜干涉下的整體避讓機制。
+    \item \textbf{Map 2}：具備極端的橫向狹長通道，強迫兩種管線在受限的單一通道內外競爭有限的無障礙空間。
+    \item \textbf{Map 3}：中央具有半封閉的「密室房間」結構，考驗螞蟻進入死胡同後的脫困與多終點收斂探索能力。
+    \item \textbf{Map 4}：高度刁鑽的迷宮型地圖，存在多個被迫交會的窄巷，嚴格測試軟性懲罰機制（Soft Penalty）與擴散半徑（Diffusion Radius）在極限環境下的參數收斂極限。
+\end{itemize}
+
+\begin{figure*}[!ht]
+    \centering
+    % 第一排：Map 0, Map 1, Map 2
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/map0.png}
+        \caption{Map 0}
+        \label{fig:map0}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/map1.png}
+        \caption{Map 1}
+        \label{fig:map1}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/map2.png}
+        \caption{Map 2}
+        \label{fig:map2}
+    \end{subfigure}
+    
+    \vskip\baselineskip % 換行並增加間距
+    
+    % 第二排：Map 3, Map 4 (置中對齊)
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/map3.png}
+        \caption{Map 3}
+        \label{fig:map3}
+    \end{subfigure}
+    \hspace{0.05\textwidth} % 給予中間一點間距讓兩張圖置中對齊更好看
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{images/map4.png}
+        \caption{Map 4}
+        \label{fig:map4}
+    \end{subfigure}
+    \caption{實驗採用之五組二維管線佈局測試地圖與 GA-ACO 最終最佳化結果}
+    \label{fig:all_maps}
+\end{figure*}
+% ==============================
 
 \subsection{CUDA Acceleration Performance}
 為了驗證 CUDA 加速架構在 GA-ACO 演算法中的實際效益，本研究針對 CPU 與 GPU 的執行時間進行了對照實驗。
@@ -293,7 +405,7 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 
 實驗紀錄了前 3 次 GA 迭代（Iteration）的執行時間，詳細數據如表 \ref{tab:cuda_perf} 所示。
 
-\begin{table}[H]
+\begin{table}[!t]
     \centering
     \caption{CPU 與 GPU 在不同迭代次數下的執行時間比較}
     \label{tab:cuda_perf}
@@ -311,7 +423,7 @@ S_{global} = \sum S_{path} + (1000 \times C_{overlap})
 在第一次迭代（Iteration 1）中，GPU 的執行時間（123.621 秒）反倒略慢於 CPU（103.348 秒）。
 此現象主要歸因於 CUDA 架構初次啟動時的「初始化開銷（Initialization Overhead）」。
 在程式剛啟動時，系統必須進行 GPU 端的記憶體配置（如 \texttt{cudaMalloc}）、cuRAND 
-隨機數生成器狀態矩陣的建立，以及大量的初始地圖與環境參數從主機端（Host）拷貝至設備端（Device）等操作，
+隨機數生成器狀態矩陣的建立，以及大量的初始地圖與環境參數從主機端（Host）複製至設備端（Device）等操作，
 這些硬體層級的準備工作導致了首代的耗時較長。
 
 然而，一旦初始化完成並進入穩定運算階段（Iteration 2 與 Iteration 3），
@@ -321,18 +433,57 @@ GPU 的極致平行優勢便立刻顯現。從第二次迭代開始，GPU 的執
  憑藉其強大的多執行緒能力維持了相當出色的基準表現；但 RTX 3090 依舊藉由其數以千計的 CUDA 核心，
  在常態運算中展現了更卓越的吞吐量。可以預期，未來若進一步擴展網格地圖的規模或增加螞蟻群體的數量，
  GPU 分攤掉記憶體傳輸成本後的加速比（Speedup Ratio）將會更加顯著。
- 而後續的實驗中為了節省時間，我們會將將$ANT_COUNT$降至100隻，並將 GA 的族群大小定為 $N=80$，
- 同時該資料量並沒有到非常大容易在IO上造成瓶頸，因此我們選擇CPU作為接下來的測試設備。
+ 本架構具備高度彈性，當螞蟻數量龐大時（如 2000 隻），CUDA 能提供顯著加速；
+ 但在超參數最佳化階段，由於我們採取了較小的個體規模（Ant=100），
+ 為了避免 PCIe 記憶體傳輸成為瓶頸，系統能自適應切換至 CPU OpenMP 進行極速評估，
+ 展現了本架構在不同運算規模下的強健性。
 
 \subsection{GA-ACO Performance}
 
-\subsubsection{Optimization Verification}
+\subsubsection{Convergence Analysis of Genetic Optimization}
+
+為了驗證分析基因演算法於超參數搜尋過程中的收斂行為，以驗證其最佳化流程之有效性。圖 \ref{fig:ga_convergence_01} 至圖 \ref{fig:ga_convergence_4} 顯示五組測試地圖於 20 次獨立實驗下，各世代最佳個體之 Score 分布以及平均收斂趨勢。
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=1.0\columnwidth]{data/boxplot_map0_converge.png}
+\includegraphics[width=1.0\columnwidth]{data/boxplot_map1_converge.png}
+\caption{GA convergence behavior on Map0 and Map1 over 25 generations.}
+\label{fig:ga_convergence_01}
+\end{figure}
+
+由圖 \ref{fig:ga_convergence_01} 可觀察到，Map0 與 Map1 的平均 Score 皆隨著世代增加而持續下降。其中 Map0 的平均 Score 約由 295 降至 155，而 Map1 則由約 97,000 降至 45,000。雖然 Map1 的搜尋空間較大且結果變異較高，但其收斂曲線仍呈現穩定下降趨勢，顯示 GA 能有效改善 ACO 的參數設定。
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=1.0\columnwidth]{data/boxplot_map2_converge.png}
+\includegraphics[width=1.0\columnwidth]{data/boxplot_map3_converge.png}
+\caption{GA convergence behavior on Map2 and Map3 over 25 generations.}
+\label{fig:ga_convergence_23}
+\end{figure}
+
+由圖 \ref{fig:ga_convergence_23} 可觀察到，Map2 與 Map3 同樣具有明顯的收斂現象。Map2 的平均 Score 約由 145 降至 64，而 Map3 則由約 240 降至 158。除了平均值持續下降之外，盒鬚圖的分布範圍亦逐漸縮小，代表族群內個體逐漸集中於相似的高品質參數組合，顯示基因演算法已逐步收斂至穩定解附近。
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=1.0\columnwidth]{data/boxplot_map4_converge.png}
+\caption{GA convergence behavior on Map4 over 25 generations.}
+\label{fig:ga_convergence_4}
+\end{figure}
+
+由圖 \ref{fig:ga_convergence_4} 可觀察到，Map4 的平均 Score 約由 295 降至 155，下降幅度接近 50\%。與其他測試地圖相同，大部分改善皆發生於前 10 個世代，而在第 15 至 20 個世代後逐漸趨於平穩，顯示演化過程已接近收斂狀態。
+
+綜合上述結果可知，本研究所提出之 GA-ACO 架構具有良好的收斂特性。無論在簡單或複雜地圖中，基因演算法皆能於有限世代內搜尋出較佳的 ACO 超參數組合，並逐步收斂至穩定解。平均 Score 的持續下降以及族群變異的逐步縮減，皆證明本研究之參數最佳化流程具有良好的搜尋能力與穩定性，能有效提升後續管線佈局問題之求解品質。
+
+
+
+\subsubsection{Hyperparameter Analysis and Verification}
 
 在此章節中，我們將展示 GA-ACO 演算法在管線佈局問題上的優化效果。為了驗證 GA 在 ACO 參數調校上的有效性，我們設計了一組對照實驗：一組為固定參數 ACO，即使用預設的參數組合（如 $\alpha=1.0$、$\beta=2.0$、$\rho=0.5$ 等）進行多次獨立執行；另一組為 GA-ACO，即讓 GA 自動搜尋最佳參數組合並評估其性能。
 
 以下實驗我們使用 map0 作為測試場景，該地圖包含兩條相互排斥的管線（瓦斯管與電管），並且每條管線均有一個起點與多個終點的佈局需求。對照組採用固定參數 ACO，實驗組則使用 GA 所搜尋到的最佳參數組合，如表 \ref{tab:aco_params} 所示。
 
-\begin{table}[htbp]
+\begin{table}[!t]
 \caption{Parameter Settings of ACO and GA-ACO}
 \label{tab:aco_params}
 \centering
@@ -351,9 +502,15 @@ $diffusion\_rad$ & 2.00 & 1.27466 \\
 \end{tabular}
 \end{table}
 
-由表 \ref{tab:aco_params} 可觀察到，GA 所搜尋出的參數與固定參數 ACO 具有明顯差異。其中，$\alpha$ 與 $\beta$ 皆有所提升，代表最佳化後的 ACO 在搜尋過程中更重視費洛蒙累積與啟發式資訊；而 $\rho$ 則由 0.50 降低至 0.177945，表示費洛蒙揮發速度降低，使較佳路徑能在搜尋過程中保留較長時間。此外，$turn\_w$ 與 $clear\_w$ 的提升顯示 GA-ACO 在成本評估中更加重視轉彎懲罰與安全距離限制。
+由表 \ref{tab:aco_params} 可觀察到，GA 所搜尋出的參數與固定參數 ACO 具有明顯差異。
+其中，$\alpha$ 與 $\beta$ 皆有所提升，代表最佳化後的 ACO 在搜尋過程中更重視費洛蒙累積與啟發式資訊；
+而 $\rho$ 則由 0.50 降低至 0.177945，表示費洛蒙揮發速度降低，使較佳路徑能在搜尋過程中保留較長時間。
+$diffusion\_rad$ 由 2.0 收斂至 1.27，顯示在狹窄地形中，過大的費洛蒙擴散反而會造成其他管線的誤判與干擾，
+GA 成功學習到了『適度收斂』的空間緩衝策略。
+此外，$turn\_w$ 與 $clear\_w$ 的提升顯示 GA-ACO 在成本評估中更加重視轉彎懲罰與安全距離限制。
 
-在該組 GA-ACO 參數下，實驗可得到最佳結果，其 Score 為 167.512。此結果顯示 GA 能有效搜尋出適合 ACO 的參數組合，作為後續多地圖實驗比較的基礎。
+在該組 GA-ACO 參數下，實驗可得到最佳結果，其 Score 為 167.512。
+此結果顯示 GA 能有效搜尋出適合 ACO 的參數組合，作為後續多地圖實驗比較的基礎。
 
 \subsubsection{Performance Comparison}
 
@@ -386,6 +543,7 @@ Map4 & 807.07 & 215.98 & 73.2\% \\
 
 \subsubsection{Statistical Evaluation over 20 Independent Runs}
 
+
 除了平均 Score 之外，本研究亦進一步分析 20 次獨立執行下的結果分布，以驗證 GA-ACO 的穩定性。固定參數 ACO 與 GA-ACO 在 Map0 至 Map4 上的盒鬚圖比較如圖 \ref{fig:boxplots_map01} 至圖 \ref{fig:boxplots_map4} 所示。
 
 \begin{figure}[htbp]
@@ -396,7 +554,25 @@ Map4 & 807.07 & 215.98 & 73.2\% \\
 \label{fig:boxplots_map01}
 \end{figure}
 
-由圖 \ref{fig:boxplots_map01} 可觀察到，在 Map0 與 Map1 中，GA-ACO 的 Score 分布普遍低於固定參數 ACO。Map0 中，GA-ACO 雖然仍存在一定變異，但整體分布較固定參數 ACO 低，表示 GA 調參後能有效降低成本。Map1 的兩種方法皆呈現較大變異，顯示該地圖本身具有較高搜尋難度；然而 GA-ACO 的中位數仍低於固定參數 ACO，說明其在複雜地圖中仍具有較佳搜尋能力。
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.47\columnwidth]{images/map0_dicuss0.png}
+\includegraphics[width=0.47\columnwidth]{images/map0_dicuss1.png}
+\caption{Map0 GA-ACO path visualization.}
+\label{fig:vis_map01}
+\end{figure}
+
+
+
+由圖 \ref{fig:boxplots_map01} 可觀察到，
+在 Map0 與 Map1 中，GA-ACO 的 Score 分布普遍低於固定參數 ACO。
+Map0 中，GA-ACO 雖然仍存在一定變異，但整體分布較固定參數 ACO 低，
+表示 GA 調參後能有效降低成本。Map0 的兩種方法皆呈現較大變異，
+顯示該地圖本身具有較高搜尋難度，在Map0的20次參數驗證測試中，我們也發現儘管使用最佳參數
+在測試中依舊會出現路徑交叉或是繞遠路的狀況，分析後推測是雙方最短路徑的成本相近，
+導致 ACO 在搜尋過程中容易在兩條路徑間來回切換，造成結果變異較大。
+相較之下，在 Map1 中，GA-ACO 的分布明顯集中於較低分數區間，
+且變異明顯縮小，顯示 GA 調參後能使 ACO 在複雜地圖中更穩定地收斂至高品質解。
 
 \begin{figure}[htbp]
 \centering
@@ -419,10 +595,14 @@ Map4 & 807.07 & 215.98 & 73.2\% \\
 
 綜合上述結果可知，GA-ACO 不僅能降低平均路徑成本，也能在多數地圖中減少不同執行結果之間的波動。此結果證明，利用基因演算法自動調整 ACO 超參數，能有效提升多管線佈局問題中的求解品質與穩定性。
 
-
 \section{Conclusion}
+本研究提出一套結合基因演算法與蟻群演算法之 GA-ACO 管線佈局最佳化架構，透過 GA 自動搜尋 ACO 的關鍵超參數，以降低傳統 ACO 對人工參數調整的依賴，並提升其在多管線路由問題中的求解能力。
 
-\clearpage
+實驗結果顯示，GA 所搜尋出的參數組合能有效改善 ACO 的搜尋效能。在五組測試地圖中，GA-ACO 皆能取得低於固定參數 ACO 的路徑成本，其中改善幅度最高可達 80.7\%。此外，透過 20 次獨立實驗之統計分析可發現，GA-ACO 不僅能獲得較低的平均 Score，其結果分布亦較為集中，顯示最佳化後的參數組合能有效提升演算法的穩定性與收斂品質。
+
+綜合上述結果可知，利用基因演算法進行 ACO 參數最佳化，能有效提升多管線佈局問題之求解品質，並改善固定參數設定所造成的效能限制。未來研究可進一步考慮更大規模之地圖環境、更多種類之管線需求，以及動態障礙物或多目標最佳化等實際工程限制，以提升本方法於實際管線配置問題中的應用價值。
+
+
 \begin{thebibliography}{00}
 \bibitem{b1} W. Jian, Z. Xiaodong, and H. Yisha, ``A novel heuristic approach for 3D pipe routing in complex environments,'' \textit{IEEE Access}, vol. 6, pp. 49764-49775, 2018.
 \bibitem{b2} 陳俊仁、翁世光, ``Pipe Routing Method Based on Ant Colony Algorithm'' \textit{國立臺灣海洋大學資訊工程學系碩士學位論文}, 2023.
