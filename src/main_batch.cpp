@@ -16,6 +16,27 @@ double randDouble(double minVal, double maxVal){
     return minVal + (double) rand() / RAND_MAX * (maxVal - minVal);
 }
 
+const int FITNESS_REPEAT = 10;
+
+double evaluateMedianFitness(int env_id, const Chromosome& dna, int gen, bool is_gpu){
+    vector<double> scores;
+
+    for(int k = 0; k < FITNESS_REPEAT; k++){
+
+        unsigned long seed = time(NULL) + env_id * 100000 + gen * 1000  + k;
+
+        ACO_Environment temp_env(env_id, seed);
+
+        double score = temp_env.run_aco(dna, false, gen, is_gpu);
+
+        scores.push_back(score);
+    }
+
+    sort(scores.begin(), scores.end());
+
+    return (scores[4] + scores[5]) / 2.0;
+}
+
 int main(){
     srand(time(NULL));
 
@@ -128,7 +149,7 @@ int main(){
                 for(int i = 0; i < POP_SIZE; i++){
                     if(population[i].fitness < 0){
                         workers.emplace_back([&, i](){
-                            population[i].fitness = envs[i]->run_aco(population[i], false, gen, is_gpu);
+                            population[i].fitness = evaluateMedianFitness(i, population[i], gen, is_gpu);
                         });
                     }
                 }
